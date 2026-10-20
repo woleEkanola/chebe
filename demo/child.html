@@ -52,6 +52,7 @@ body{margin:0;font-family:var(--font);color:var(--ink);
 .toprow{display:flex;justify-content:space-between;align-items:center;margin:6px 2px 12px}
 .logo{display:flex;align-items:center;gap:8px;font-weight:800;font-size:17px;letter-spacing:-.03em;color:var(--pine-ink)}
 .logo-mark{width:26px;height:26px;border-radius:8px;background:var(--pine);display:grid;place-items:center;color:var(--lime);font-weight:800}
+.info-btn{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:60;backdrop-filter:blur(8px);flex-shrink:0}
 .muted{color:var(--sage);font-size:12.5px;line-height:1.5}
 .small{font-size:12.5px}
 .shield{background:var(--pine-ink);color:#fff;border-radius:20px;padding:20px;text-align:center;margin-bottom:10px}
@@ -67,7 +68,12 @@ body{margin:0;font-family:var(--font);color:var(--ink);
 .toast{position:absolute;left:50%;bottom:108px;transform:translateX(-50%) translateY(8px);background:#101915;color:#fff;font-size:12.5px;font-weight:600;
   padding:10px 15px;border-radius:999px;opacity:0;transition:.25s;z-index:50;white-space:nowrap;box-shadow:0 10px 24px rgba(0,0,0,.3)}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-@media(max-width:560px){body{padding:0;gap:0}.phone{max-width:375px;max-height:90vh;width:auto;height:auto;aspect-ratio:9/20;border-radius:0;padding:0;background:none;box-shadow:none}.phone::before,.siderail,.punch-hole{display:none}.screen{border-radius:0;margin:0;height:100%}}
+.info-popup{display:none;position:fixed;inset:0;background:rgba(16,25,21,.9);z-index:80;color:#fff;padding:24px;overflow-y:auto}
+.info-popup.open{display:block}
+.info-popup .close{position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:24px;cursor:pointer;line-height:1}
+.info-popup h2{margin:0 0 12px;color:#fff;font-size:20px}
+.info-popup p{color:#9DB4A4;font-size:14px;line-height:1.6;margin:0 0 12px}
+@media(max-width:560px){body{padding:0;gap:0}.phone{width:100vw;height:100vh;max-height:none;max-width:none;border-radius:0;padding:0;background:none;box-shadow:none;aspect-ratio:auto}.phone::before,.siderail,.punch-hole,.homebar{display:none}.screen{border-radius:0;margin:0;height:100%}.view{padding:8px 14px 100px}.statusbar{padding-top:14px}.copy{display:none}.info-btn{display:flex}}
 </style>
 </head>
 <body>
@@ -93,6 +99,7 @@ body{margin:0;font-family:var(--font);color:var(--ink);
     <div class="view">
       <div class="toprow">
         <div class="logo"><div class="logo-mark">c</div>chebe</div>
+        <button class="info-btn" onclick="toggleInfo()">i</button>
       </div>
 
       <div class="shield" id="childShield">
@@ -115,9 +122,17 @@ body{margin:0;font-family:var(--font);color:var(--ink);
   </div>
 </div>
 
+<div class="info-popup" id="infoPopup">
+  <button class="close" onclick="toggleInfo()">&times;</button>
+  <h2 style="margin-top:0;color:#fff">Chebe — Child view</h2>
+  <p style="color:#9DB4A4">Pixel 8 mockup · child companion mode. Shield active by default. Hold SOS (2 s) to bypass locks and alert Mum with live location.</p>
+  <p style="color:#9DB4A4">Mock data · one HTML file · no backend · v2</p>
+</div>
+
 <script>
 const $=s=>document.querySelector(s);
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2300);}
+function toggleInfo(){document.getElementById('infoPopup').classList.toggle('open')}
 (()=>{const b=$('#sosBtn'),f=$('#sosFill'),t=$('#sosTxt');let tm=null,raf=null,st=0;
  const prog=()=>{st+=50;f.style.width=Math.min(100,st/20)+'%';if(st>=2000){done();}else raf=requestAnimationFrame(()=>setTimeout(prog,50));};
  const done=()=>{clearTimeout(tm);cancelAnimationFrame(raf);t.textContent='SOS sent — Mum alerted';toast('SOS sent — critical push delivered');

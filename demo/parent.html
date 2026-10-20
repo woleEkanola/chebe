@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chebe — Parent Demo</title>
+<style>
+:root{
+  --paper:#F6F4EC; --card:#FFFFFF; --ink:#17211C; --sage:#64756B; --sage2:#8A9A90;
+  --line:#E7E1D1; --line2:#EFEAD9;
+  --pine:#0C5B40; --pine-ink:#083B2A; --pine-soft:#E3EFE7;
+  --lime:#C9F16F; --lime-ink:#1C3405;
+  --danger:#B3261E; --danger-soft:#F9E7E5; --amber:#8A5A12; --amber-soft:#FAEED3;
+  --blue:#2F6FED; --blue-soft:#E7EFFE;
+  --r:14px;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden}
+body{margin:0;font-family:var(--font);color:var(--ink);
+  background:radial-gradient(1200px 800px at 20% 10%,#1d3a2d 0%,#0f1f17 55%,#090f0c 100%);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;gap:24px;padding:12px;}
+.copy{color:#DCE8DE;max-width:320px;display:none}
+.copy h1{font-size:26px;letter-spacing:-.04em;margin:12px 0 8px;color:#fff}
+.copy p{font-size:13.5px;line-height:1.6;color:#9DB4A4;margin:0 0 12px}
+.copy .kbd{background:#1e2f26;border:1px solid #2c4436;color:var(--lime);padding:2px 8px;border-radius:7px;font-size:12px;font-weight:700}
+.copy .meta{font-size:12px;color:#7d9687;border-top:1px solid #22382c;margin-top:14px;padding-top:12px}
+@media(min-width:1020px){.copy{display:block}}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-mark{width:34px;height:34px;border-radius:11px;background:var(--pine);display:grid;place-items:center;color:var(--lime);font-weight:800;font-size:18px}
+.brand-name{font-weight:800;font-size:21px;letter-spacing:-.04em;color:#fff}
+.brand-name small{display:block;font-size:11px;font-weight:600;letter-spacing:.14em;color:#8fa895;text-transform:uppercase}
+
+/* ===== Pixel 8 phone frame (20:9 = 1080x2400) ===== */
+.phone{max-width:375px;max-height:90vh;width:auto;height:auto;aspect-ratio:9/20;position:relative;flex-shrink:0;
+  border-radius:32px;padding:8px;
+  background:linear-gradient(145deg,#4a545c,#2b3238,#121619,#2b3238,#7b8791);
+  box-shadow:0 40px 100px rgba(0,0,0,.6),0 4px 18px rgba(0,0,0,.4);
+  overflow:hidden;}
+.phone::before{content:"";position:absolute;inset:2px;border-radius:30px;background:#000;opacity:.55;pointer-events:none}
+.siderail{position:absolute;top:0;bottom:0;width:8px;background:linear-gradient(180deg,#4a545c,#2b3238,#121619,#3a4249)}
+.siderail.l{left:0;border-top-left-radius:26px;border-bottom-left-radius:26px}
+.siderail.r{right:0;border-top-right-radius:26px;border-bottom-right-radius:26px}
+.punch-hole{position:absolute;top:16px;left:50%;transform:translateX(-50%);width:20px;height:20px;border-radius:50%;background:#000;z-index:35}
+.screen{position:relative;height:100%;margin:0;border-radius:26px;overflow:hidden;background:var(--paper);display:flex;flex-direction:column;}
+.statusbar{z-index:30;display:flex;justify-content:space-between;align-items:center;padding:16px 24px 4px;font-size:13px;font-weight:600;color:var(--ink)}
+.statusbar .time{font-variant-numeric:tabular-nums}
+.statusbar .ics{display:flex;align-items:center;gap:5px}
+.view{flex:1;overflow-y:auto;padding:8px 16px 116px;scrollbar-width:none}
+.view::-webkit-scrollbar{display:none}
+.homebar{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);width:120px;height:4px;border-radius:3px;background:#5c656e;opacity:.85;z-index:35}
+
+/* ===== app ui ===== */
+.appnav{display:flex;align-items:center;justify-content:space-between;margin:6px 2px 10px}
+.wordmark{display:flex;align-items:center;gap:9px}
+.wordmark .m{width:30px;height:30px;border-radius:10px;background:var(--pine);display:grid;place-items:center;color:var(--lime);font-weight:800}
+.wordmark b{font-size:19px;letter-spacing:-.03em}
+.eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sage2);margin:12px 4px 8px}
+.greet{font-size:28px;font-weight:800;letter-spacing:-.04em;margin:0}
+.sub{font-size:12px;color:var(--sage);margin:4px 0 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:8px;box-shadow:0 1px 0 rgba(23,33,28,.04)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.muted{color:var(--sage);font-size:12px;line-height:1.5}
+.small{font-size:12px}.big{font-size:28px;font-weight:800;letter-spacing:-.04em}
+.childrow{display:flex;gap:10px;align-items:center;flex-wrap:nowrap}
+.childrow > div:nth-child(2){min-width:0}
+.childrow div:nth-child(2) > div:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.avatar{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#2F6FED,#174a9e);color:#fff;display:grid;place-items:center;font-weight:800;font-size:17px;flex-shrink:0}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:1px}
+.dot.g{background:#1d9e6b}.dot.a{background:#D99A1F}.dot.r{background:var(--danger)}
+.statuschip{font-size:11px;font-weight:700;padding:5px 9px;border-radius:999px;background:var(--pine-soft);color:var(--pine-ink)}
+.statuschip.paused{background:var(--amber-soft);color:var(--amber)}
+.switch{width:48px;height:28px;border-radius:999px;background:#D6D0BB;border:0;position:relative;cursor:pointer;transition:.2s;flex-shrink:0}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.25);transition:.2s}
+.switch.on{background:var(--pine)}.switch.on::after{left:22px}
+.btn{border:0;border-radius:13px;padding:10px 12px;font:inherit;font-weight:700;font-size:13px;cursor:pointer}
+.btn.primary{background:var(--pine);color:#fff}.btn.lime{background:var(--lime);color:var(--lime-ink)}
+.btn.quiet{background:#F0EBDB;color:var(--pine-ink)}.btn.danger{background:var(--danger);color:#fff}
+.btn.block{width:100%}
+.btn:active{transform:scale(.98)}
+.spark{display:flex;align-items:flex-end;gap:3px;height:24px;margin-top:8px}
+.spark i{width:7px;border-radius:3px;background:#D8E4D8}
+.spark i.hot{background:var(--pine)}
+.daydots{display:flex;gap:5px;margin-top:8px}
+.daydots span{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;background:var(--pine-ink);color:#fff}
+.daydots span.off{background:#EEE8D4;color:var(--sage)}
+input[type=range]{width:100%;accent-color:var(--pine);margin:8px 0 2px}
+.approw{display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line2)}
+.approw:first-of-type{border-top:0}
+.appic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:15px;color:#fff;font-weight:800;flex-shrink:0}
+.bar{height:7px;background:#EEE8D4;border-radius:99px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--pine);border-radius:99px}
+/* map */
+.mapcard{padding:10px}
+.mapwrap{height:210px;border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--line);background:#E9EFE4}
+.mapwrap svg{position:absolute;inset:0;width:100%;height:100%}
+.pinlayer{position:absolute;transition:left 1.4s ease,top 1.4s ease}
+.halo{width:52px;height:52px;border-radius:50%;background:rgba(12,91,64,.16);margin:-36px 0 0 -18px;animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.12);opacity:.7}}
+.pindot{width:18px;height:18px;background:var(--pine);border:3px solid #fff;border-radius:50%;box-shadow:0 4px 12px rgba(0,0,0,.35);margin:0 auto}
+.pinlab{background:#101915;color:#fff;font-size:11px;font-weight:700;padding:4px 9px;border-radius:999px;white-space:nowrap;margin-top:3px}
+.mapfoot{display:flex;justify-content:space-between;align-items:center;padding:10px 4px 2px}
+/* alerts */
+.arow{display:flex;gap:11px;padding:10px 0;border-top:1px solid var(--line2);cursor:pointer}
+.arow:first-of-type{border-top:0}
+.sev{width:10px;height:10px;border-radius:50%;margin-top:5px;flex-shrink:0}
+.sev.high{background:var(--danger);box-shadow:0 0 0 4px var(--danger-soft)}
+.sev.med{background:#D99A1F;box-shadow:0 0 0 4px var(--amber-soft)}
+.sev.low{background:var(--blue);box-shadow:0 0 0 4px var(--blue-soft)}
+.snip{background:#101915;color:#F3E3A1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:8px 10px;border-radius:10px;margin:8px 0;line-height:1.5}
+.guide{background:#F6F1E0;border-radius:11px;padding:8px 10px;font-size:12px;line-height:1.55;display:none;margin-bottom:4px}
+.guide.open{display:block}
+/* chat */
+.thread{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.msg{max-width:80%;padding:10px 13px;border-radius:17px;font-size:13px;line-height:1.5}
+.msg.bot{background:#fff;border:1px solid var(--line);border-bottom-left-radius:6px;align-self:flex-start}
+.msg.me{background:var(--pine-ink);color:#fff;border-bottom-right-radius:6px;align-self:flex-end}
+.confirm{background:#EFF5EA;border:1.5px solid var(--pine);border-radius:13px;padding:10px 11px;font-size:12px;margin-top:6px}
+.sugs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.sugs button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 9px;font-size:11.5px;font-weight:700;color:var(--pine-ink);cursor:pointer}
+.composer{display:flex;gap:8px}
+.composer input{flex:1;border:1.5px solid var(--line);border-radius:13px;padding:12px;font:inherit;background:#fff}
+.typing{display:inline-flex;gap:4px}.typing i{width:6px;height:6px;border-radius:50%;background:#B9C4BC;animation:tp 1s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes tp{0%,100%{opacity:.4}50%{opacity:1}}
+/* tabs */
+.tabbar{position:absolute;left:13px;right:13px;bottom:16px;z-index:30;background:rgba(255,255,255,.94);backdrop-filter:blur(14px);
+  border:1px solid var(--line);border-radius:26px;display:flex;padding:7px;box-shadow:0 12px 30px rgba(0,0,0,.12)}
+.tabbar button{flex:1;border:0;background:transparent;font:inherit;cursor:pointer;color:var(--sage);border-radius:18px;padding:7px 2px 6px;position:relative;
+  display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:700}
+.tabbar button svg{width:20px;height:20px}
+.tabbar button.on{background:var(--pine-ink);color:#fff}
+.count{position:absolute;top:1px;right:calc(50% - 22px);background:var(--danger);color:#fff;font-size:9.5px;min-width:17px;height:17px;border-radius:9px;display:grid;place-items:center;border:2px solid #fff}
+.screens{display:none}.screens.on{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}}
+.toast{position:absolute;left:50%;bottom:108px;transform:translateX(-50%) translateY(8px);background:#101915;color:#fff;font-size:12.5px;font-weight:600;
+  padding:10px 15px;border-radius:999px;opacity:0;transition:.25s;z-index:50;white-space:nowrap;box-shadow:0 10px 24px rgba(0,0,0,.3)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media(max-width:560px){body{padding:0;gap:0}.phone{max-width:375px;max-height:90vh;width:auto;height:auto;aspect-ratio:9/20;border-radius:0;padding:0;background:none;box-shadow:none}.phone::before,.siderail,.punch-hole{display:none}.screen{border-radius:0;margin:0;height:100%}.tabbar{left:10px;right:10px;bottom:12px}.statusbar{padding-top:14px}}
+</style>
+</head>
+<body>
+
+<div class="copy">
+  <div class="brand"><div class="brand-mark">c</div><div class="brand-name">chebe<small>Family safety</small></div></div>
+  <h1>Chebe — Parent view</h1>
+  <p>Pixel 8 mockup · single app · Android-first. Try <span class="kbd">Pause</span>, <span class="kbd">Map</span>, <span class="kbd">Ask</span> intents, then open <span class="kbd">Child</span> demo separately.</p>
+  <div class="meta">Mock data · one HTML file · no backend · v2</div>
+</div>
+
+<div class="phone">
+  <div class="siderail l"></div><div class="siderail r"></div><div class="punch-hole"></div>
+  <div class="screen">
+    <div class="statusbar"><span class="time">9:41</span>
+      <span class="ics">
+        <svg width="17" height="11" viewBox="0 0 17 11" fill="#17211C"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+        <svg width="16" height="11" viewBox="0 0 16 12" fill="none" stroke="#17211C" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 4.2a10 10 0 0 1 13 0M4.2 7a6.4 6.4 0 0 1 7.6 0M7 10.2h.01"/></svg>
+        <svg width="25" height="12" viewBox="0 0 25 12"><rect x=".5" y=".5" width="21" height="11" rx="3.5" fill="none" stroke="#17211C" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="#17211C"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="#17211C" opacity=".4"/></svg>
+      </span>
+    </div>
+
+    <div class="view">
+      <div class="appnav">
+        <div class="wordmark"><div class="m">c</div><b>chebe</b></div>
+      </div>
+
+      <!-- HOME -->
+      <section class="screens on" data-s="home">
+        <p class="eyebrow">Tuesday, Nov 12</p>
+        <h2 class="greet">Good evening, Ama.</h2>
+        <p class="sub">Alex is within Bedtime rules · 1 item needs review.</p>
+        <div class="card" style="margin-top:10px">
+          <div class="childrow">
+            <div class="avatar">A</div>
+            <div style="flex:1"><div style="font-weight:800">Alex · 11</div><div class="muted" id="statusLine">Galaxy A14 · policy v12 · online</div></div>
+            <span class="statuschip" id="statusChip"><span class="dot g"></span>Active</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row"><div><div style="font-weight:800">Instant Pause</div><div class="muted" id="pauseSub">Off · one tap locks games &amp; social</div></div>
+          <button class="switch" id="pauseSw" onclick="togglePause()" aria-label="pause"></button></div>
+          <div class="muted" id="pauseWarn" style="display:none;margin-top:8px;border-top:1px solid var(--line2);padding-top:8px">Child sees a 1-minute countdown, then shields engage. Applies in under 5 seconds.</div>
+        </div>
+        <div class="card">
+          <div class="row"><span class="muted">SCREEN TIME TODAY</span><span class="statuschip">−32m vs yesterday</span></div>
+          <div class="big">2h 41m</div>
+          <div class="spark" aria-hidden="true">
+            <i style="height:10px"></i><i style="height:16px"></i><i style="height:12px"></i><i style="height:20px"></i><i class="hot" style="height:24px"></i><i style="height:14px"></i><i style="height:18px"></i><i style="height:10px"></i><i style="height:16px"></i><i style="height:22px"></i><i class="hot" style="height:28px"></i><i style="height:14px"></i>
+          </div>
+          <div class="row" style="margin-top:10px"><button class="btn lime" onclick="bonus(15)">+15 min</button><button class="btn quiet" onclick="go('report')">Weekly report</button></div>
+        </div>
+        <div class="card">
+          <div class="row"><div style="font-weight:800">Bedtime · 21:00 – 07:00</div><span class="muted">Mon–Fri</span></div>
+          <div class="muted">Locks games &amp; social · Phone and SOS stay available · works offline.</div>
+          <button class="btn quiet block" style="margin-top:10px" onclick="go('rules')">Edit schedule</button>
+        </div>
+        <div class="card">
+          <div class="row"><div><div style="font-weight:800"><span class="dot r"></span>Safety review</div><div class="muted">1 high · 2 FYI · guidance included</div></div>
+          <button class="btn danger" onclick="go('alerts')">Review</button></div>
+        </div>
+      </section>
+
+      <!-- RULES -->
+      <section class="screens" data-s="rules">
+        <p class="eyebrow">Controls</p><h2 class="greet" style="font-size:22px">Schedules &amp; limits</h2>
+        <p class="sub">Enforced on-device, even offline.</p>
+        <div class="card" style="margin-top:10px">
+          <div class="row"><div style="font-weight:800">Bedtime</div><button class="switch on" onclick="this.classList.toggle('on')"></button></div>
+          <div class="muted">21:00 → 07:00 · locks at start, unlocks at end</div>
+          <div class="daydots"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span class="off">S</span><span class="off">S</span></div>
+        </div>
+        <div class="card">
+          <div style="font-weight:800">Daily app limits</div>
+          <div class="approw"><div class="appic" style="background:#C0392B">Y</div>
+            <div style="flex:1"><div class="row"><b class="small">YouTube</b><span class="muted" id="ytVal">60 min/day</span></div>
+            <input type="range" min="0" max="180" value="60" oninput="document.getElementById('ytVal').textContent=this.value+' min/day'"></div></div>
+          <div class="approw"><div class="appic" style="background:#2F6FED">R</div>
+            <div style="flex:1"><div class="row"><b class="small">Roblox</b><span class="muted">45 min/day · text chat monitored</span></div>
+            <div class="bar"><i style="width:62%"></i></div><div class="muted" style="margin-top:4px">28 of 45 min used — blocks automatically at limit.</div></div></div>
+        </div>
+        <div class="card">
+          <div style="font-weight:800">Habit rewards</div>
+          <div class="muted">Manual bonus only in v1. Bonus never overrides Bedtime.</div>
+          <div class="row" style="margin-top:10px"><button class="btn lime" onclick="bonus(15)">+15 min</button><button class="btn lime" onclick="bonus(30)">+30 min</button></div>
+          <div class="muted" id="bonusLine" style="margin-top:8px">No bonus granted yet today.</div>
+        </div>
+      </section>
+
+      <!-- MAP -->
+      <section class="screens" data-s="map">
+        <p class="eyebrow">Location</p><h2 class="greet" style="font-size:22px">Family map</h2>
+        <p class="sub" id="mapSub">Live · updated 12s ago · ±8 m accuracy</p>
+        <div class="card mapcard" style="margin-top:10px">
+          <div class="mapwrap">
+            <svg viewBox="0 0 360 210" preserveAspectRatio="xMidYMid slice">
+              <rect width="360" height="210" fill="#E7EEE2"/>
+              <rect x="0" y="0" width="120" height="70" fill="#D5E5CF"/>
+              <rect x="250" y="140" width="110" height="70" fill="#D5E5CF"/>
+              <g stroke="#FFFFFF" stroke-width="14" stroke-linecap="round"><path d="M-10 130 H370"/><path d="M120 -10 V220"/><path d="M250 -10 V220"/><path d="M-10 60 H370" stroke-width="8"/></g>
+              <g stroke="#CBD8C4" stroke-width="1.5"><path d="M-10 130 H370"/><path d="M120 -10 V220"/></g>
+              <circle cx="185" cy="105" r="60" fill="rgba(12,91,64,.08)" stroke="#0C5B40" stroke-width="2" stroke-dasharray="7 6"/>
+              <g font-family="inherit" font-size="10" fill="#5E6F63" font-weight="700"><text x="14" y="22">MAPLE PARK</text><text x="262" y="200">SCHOOL (v1.1)</text></g>
+              <g font-family="inherit" font-size="10" fill="#0C5B40" font-weight="800"><text x="150" y="38">⌂ HOME · 200 m</text></g>
+            </svg>
+            <div class="pinlayer" id="pin" style="left:176px;top:96px"><div class="halo"></div><div class="pindot"></div><div class="pinlab">Alex</div></div>
+          </div>
+          <div class="mapfoot"><span class="muted">Geofence entry / exit → instant push</span><button class="btn quiet" onclick="toast('Fence editor: drag radius 100–500 m')">Edit fence</button></div>
+        </div>
+        <div class="card"><div class="row"><div><div style="font-weight:800">Emergency SOS</div><div class="muted" id="sosState">Idle · bypasses all locks · overrides DND</div></div>
+          <button class="btn quiet" onclick="toast('SOS drill push sent (DND override)')">Send test push</button></div></div>
+      </section>
+
+      <!-- ALERTS -->
+      <section class="screens" data-s="alerts">
+        <p class="eyebrow">Safety</p><h2 class="greet" style="font-size:22px">Review</h2>
+        <p class="sub">Only flagged moments surface — never the full inbox.</p>
+        <div class="card" style="margin-top:10px">
+          <div class="arow" onclick="document.getElementById('g1').classList.toggle('open')">
+            <span class="sev high"></span>
+            <div style="flex:1"><div class="row"><b class="small">Toxic chat in Roblox</b><span class="muted">4:12 PM · High</span></div>
+              <div class="snip">“…u r trash kid, uninstall or else [redacted]”</div>
+              <div class="muted">Text-chat monitor · confidence 0.93 · player muted pending your call.</div>
+              <div class="guide" id="g1"><b>Guidance — how to talk about this.</b><br>“I saw a mean message in your game. Do you know this player? You did nothing wrong — want to block them together?”<div class="muted" style="margin-top:6px">Expert-reviewed lesson pack v0.</div>
+              <div class="row" style="margin-top:8px"><button class="btn quiet" onclick="event.stopPropagation();toast('Kept for discussion')">Discuss later</button><button class="btn primary" onclick="event.stopPropagation();toast('Player muted + reported')">Mute + report</button></div></div>
+            </div></div>
+          <div class="arow" onclick="toast('Sender queued for review')">
+            <span class="sev med"></span>
+            <div style="flex:1"><div class="row"><b class="small">Unknown number via SMS</b><span class="muted">2:05 PM</span></div>
+            <div class="muted">“hey its jay from lobby, add me on…” — sender not in approved contacts.</div></div></div>
+          <div class="arow" onclick="toast('Filter rule opened')">
+            <span class="sev low"></span>
+            <div style="flex:1"><div class="row"><b class="small">Gambling site blocked</b><span class="muted">Yesterday</span></div>
+            <div class="muted">gamble-arcade.example · local filter · whitelist / blacklist available.</div></div></div>
+        </div>
+      </section>
+
+      <!-- CHAT -->
+      <section class="screens" data-s="chat">
+        <p class="eyebrow">Assistant</p><h2 class="greet" style="font-size:22px">Ask Chebe</h2>
+        <p class="sub">Acts on your words — every action has Undo.</p>
+        <div class="card" style="margin-top:10px">
+          <div class="thread" id="chatlog">
+            <div class="msg bot">Hi Ama. I can pause devices, block apps, locate Alex, set bedtimes, and summarize the day. What should I do?</div>
+          </div>
+          <div class="sugs">
+            <button onclick="ask('Where is Alex?')">Where is Alex?</button>
+            <button onclick="ask('Block YouTube today')">Block YouTube</button>
+            <button onclick="ask('Pause everything')">Pause</button>
+            <button onclick="ask('Summarize today')">Summarize</button>
+          </div>
+          <div class="composer"><input id="chatIn" placeholder="Try: set bedtime 9pm…" onkeydown="if(event.key==='Enter')sendChat()"><button class="btn primary" onclick="sendChat()">Send</button></div>
+        </div>
+      </section>
+
+      <!-- REPORT -->
+      <section class="screens" data-s="report">
+        <p class="eyebrow">Nov 3 – 9 · Weekly wrap-up</p><h2 class="greet">Trending calmer.</h2>
+        <p class="sub">3h 12m average per day · down 11% vs last week.</p>
+        <div class="card" style="margin-top:10px">
+          <div class="row small"><span>YouTube</span><span class="muted">1h 04m</span></div><div class="bar"><i style="width:72%"></i></div>
+          <div class="row small" style="margin-top:10px"><span>Roblox</span><span class="muted">48m</span></div><div class="bar"><i style="width:52%"></i></div>
+          <div class="row small" style="margin-top:10px"><span>Khan Kids</span><span class="muted">31m · learning</span></div><div class="bar"><i style="width:34%;background:#7BAF6E"></i></div>
+        </div>
+        <div class="card"><div class="row"><div><div style="font-weight:800">2 alerts this week</div><div class="muted">Down from 5 · both resolved with guidance</div></div>
+        <button class="btn quiet" onclick="go('alerts')">View</button></div></div>
+      </section>
+
+    </div>
+    <div class="toast" id="toast"></div>
+    <nav class="tabbar" id="tabs">
+      <button data-t="home" class="on" onclick="go('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>Home</button>
+      <button data-t="rules" onclick="go('rules')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>Rules</button>
+      <button data-t="map" onclick="go('map')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg>Map</button>
+      <button data-t="alerts" onclick="go('alerts')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7-2.5 7h17S18 15 18 9Z"/><path d="M10 20a2.2 2.2 0 0 0 4 0"/></svg>Alerts<span class="count">3</span></button>
+      <button data-t="chat" onclick="go('chat')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4Z"/><path d="M19 15l.9 2.1 2.1.9-2.1.9L19 21l-.9-2.1-2.1-.9 2.1-.9Z"/></svg>Ask</button>
+    </nav>
+    <div class="homebar"></div>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
+let paused=false;
+function go(name){
+  $$('.screens').forEach(e=>e.classList.toggle('on',e.dataset.s===name));
+  $$('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===name));
+  document.querySelector('.view').scrollTop=0;
+}
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2300);}
+function togglePause(){
+  paused=!paused;
+  $('#pauseSw').classList.toggle('on',paused);
+  $('#pauseSub').textContent=paused?'On · shields engage after 1-min warning':'Off · one tap locks games & social';
+  $('#pauseWarn').style.display=paused?'block':'none';
+  const c=$('#statusChip');c.innerHTML=paused?'<span class="dot a"></span>Paused':'<span class="dot g"></span>Active';c.classList.toggle('paused',paused);
+  $('#statusLine').textContent=paused?'Galaxy A14 · policy v13 · pause pending':'Galaxy A14 · policy v12 · online';
+  toast(paused?'Pause sent — locks in under 5 s':'Devices resumed');
+}
+function bonus(m){$('#bonusLine').textContent='+'+m+' min granted just now · never overrides Bedtime.';toast('+'+m+' min bonus granted');}
+const spots=[[176,96],[204,78],[152,116],[216,108],[138,76]];let mi=0;
+setInterval(()=>{mi=(mi+1)%spots.length;const p=$('#pin');if(!p)return;p.style.left=spots[mi][0]+'px';p.style.top=spots[mi][1]+'px';
+  $('#mapSub').textContent='Live · updated '+(8+mi*4)+'s ago · ±8 m accuracy';},3000);
+function bubble(who,text,html){const d=document.createElement('div');d.className='msg '+who;if(html)d.innerHTML=text;else d.textContent=text;$('#chatlog').appendChild(d);d.scrollIntoView({block:'nearest',behavior:'smooth'});}
+function ask(t){$('#chatIn').value=t;sendChat();}
+function sendChat(){
+  const inp=$('#chatIn'),q=inp.value.trim();if(!q)return;inp.value='';bubble('me',q);
+  const tp=document.createElement('div');tp.className='msg bot';tp.innerHTML='<span class="typing"><i></i><i></i><i></i></span>';$('#chatlog').appendChild(tp);
+  const s=q.toLowerCase();
+  setTimeout(()=>{tp.remove();
+    if(/where.*alex|location/.test(s))bubble('bot','Alex is inside the <b>Home fence</b> (±8 m, 12 s ago). <a href="#" onclick="go(\'map\');return false">Open map</a>',1);
+    else if(/youtube/.test(s)){const un=/unblock/.test(s);bubble('bot',(un?'YouTube limit removed.':'YouTube blocked for today.')+'<div class="confirm"><div class="row"><span>Rule: com.google.youtube · today only</span><button class="btn quiet" style="padding:7px 11px" onclick="toast(\'Change undone\')">Undo</button></div></div>',1);}
+    else if(/pause/.test(s)){if(!paused)togglePause();bubble('bot','Done — non-essential apps pause with a 1-minute warning.',0);}
+    else if(/resume/.test(s)){if(paused)togglePause();bubble('bot','Done — devices resumed.',0);}
+    else if(/bedtime|9\s?pm|21/.test(s))bubble('bot','Bedtime set to <b>21:00–07:00, Mon–Fri</b>.<div class="confirm"><div class="row"><span>Applies tonight · works offline</span><button class="btn quiet" style="padding:7px 11px" onclick="toast(\'Change undone\')">Undo</button></div></div>',1);
+    else if(/summar/.test(s))bubble('bot','Today: <b>2h 41m</b> (−32m), top app YouTube 1h 04m, 1 high alert resolved. Full digest in the report tab.',1);
+    else bubble('bot','I can pause, block apps, locate Alex, set bedtimes, or summarize. Try “summarize today”.',0);
+  },650);
+}
+</script>
+</body>
+</html>

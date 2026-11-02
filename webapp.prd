@@ -1,0 +1,102 @@
+# Product Requirements Document (PRD): Chebe Parent Web Dashboard
+
+**Product Name:** Chebe (Parent Web App & Portal)
+
+**Document Version:** 1.0
+
+**Target Platform:** Responsive Web Application (Optimized for Desktop browsers, Tablets, and Mobile Web)
+
+**Primary Tech Stack:** Next.js (React), Tailwind CSS, Shadcn UI, REST/WebSockets API
+
+---
+
+## 1. Executive Summary & Product Vision
+
+The Chebe Parent Web Dashboard serves as the central command center for parents to manage their children's digital safety, screen time limits, and real-time physical location. Designed as a web-first application, it allows busy parents to configure rules, monitor safety alerts, and execute remote device controls (such as instant screen pauses or schedule updates) across linked Windows laptops and mobile companion apps from any web browser without needing to install specialized parent software on their own devices.
+
+---
+
+## 2. Target Audience & Persona
+
+* **Primary User (The Parent / Account Owner):** Working professionals and parents who manage family logistics on the go. They need an uncluttered, lightning-fast dashboard to quickly check status updates, handle "Instant Pause" requests during family time, and review actionable safety summaries rather than wading through raw log files.
+
+---
+
+## 3. Core Objectives & Success Metrics
+
+* **Objective:** Provide zero-latency remote management over children’s digital devices with 99.9% command dispatch reliability.
+* **Key Performance Indicators (KPIs):**
+* **Command Latency:** Under 3 seconds from clicking "Instant Pause" on the web app to device lockdown.
+* **Dashboard Session Adoption:** High weekly retention of parents checking the weekly summary and alert logs.
+* **Zero Cross-Tenant Leaks:** Bulletproof multi-tenant separation ensuring parents only view data for authorized child profiles.
+
+
+
+---
+
+## 4. Functional Requirements & Information Architecture
+
+### 4.1 Authentication & Family Device Pairing
+
+*Goal: Allow parents to securely create an account and pair new Windows laptops or companion apps using a secure onboarding workflow.*
+
+| Feature | Description | Acceptance Criteria |
+| --- | --- | --- |
+| **Parent Account Management** | Secure email/password login with multi-factor authentication (MFA) support. | Parent can register, log in, and manage account profile settings. |
+| **Child Profile Setup** | Add, edit, or remove child profiles (Name, Age, Avatar). | Parent can create distinct profiles to tailor different rules per child. |
+| **Device Pairing Wizard** | Generates a temporary 6-digit pairing code to link a child's Windows laptop or mobile app to the correct parent profile. | Entering the code on the Windows client binds the machine to the parent's tenant database instantly. |
+
+---
+
+### 4.2 Main Dashboard & Command Center (Home View)
+
+*Goal: Provide an immediate, at-a-glance status overview of all linked children and master controls.*
+
+| Feature | Description | Acceptance Criteria |
+| --- | --- | --- |
+| **Family Overview Grid** | Card layout for each child displaying current status (Online/Offline, Active App, Battery level, Current Schedule mode like "Focus Time" or "Free Time"). | Real-time status indicators update via WebSockets without manual page refreshing. |
+| **Master "Instant Pause" Switch** | A prominent, one-tap global switch to instantly lock all linked devices or cut internet access. | Tapping the switch broadcasts a lock command to all child devices within 3 seconds; displays a visual confirmation state. |
+| **Recent Alerts Stream** | Live feed of high-priority safety flags (cyberbullying, unknown contacts, web blocks). | Clicking an alert expands context and provides expert-backed conversation guides. |
+
+---
+
+### 4.3 Routine & Screen Time Manager
+
+*Goal: Configure and visualize automated device rules and schedules.*
+
+| Feature | Description | Acceptance Criteria |
+| --- | --- | --- |
+| **Visual Schedule Builder** | Interactive weekly calendar grid allowing parents to paint time blocks (e.g., Bedtime, School, Homework). | Drag-and-drop or click-to-select time ranges; rules sync automatically to the Windows local service for offline resilience. |
+| **App & Category Limits** | Toggle daily time caps on app categories (e.g., Social Media, Gaming) or blacklist specific executables. | Parents can select from a discovered inventory of installed apps on the child's laptop and apply restrictions. |
+| **Bonus Time Grant** | Quick action button to award +15 or +30 minutes of extra screen time. | Instantly pushes a time extension to the active child device session. |
+
+---
+
+### 4.4 Live Map & Location Tracking
+
+*Goal: Display real-time physical whereabouts and safety zones.*
+
+| Feature | Description | Acceptance Criteria |
+| --- | --- | --- |
+| **Interactive Map View** | Embedded map UI (e.g., Mapbox/Google Maps) plotting the live GPS coordinates of the child's device. | Updates location coordinates automatically every 30–60 seconds when the map tab is active. |
+| **Geofence Zone Manager** | Interface allowing parents to draw safe perimeters (Home, School) with custom radiuses. | Triggers instant push/web notifications when a child's device crosses the boundary. |
+
+---
+
+### 4.5 The Smart Parenting Assistant (Conversational Interface)
+
+*Goal: Enable natural language control and quick data queries.*
+
+| Feature | Description | Acceptance Criteria |
+| --- | --- | --- |
+| **Chat Command Box** | A conversational text input box positioned in the web dashboard. | Parents can type commands like *"Block YouTube for Alex"* or *"Where is Sarah right now?"*, and the assistant executes the API call or fetches the map instantly. |
+| **Contextual Summaries** | AI-generated digest of the child's weekly activity trends and suggested discussion points. | Presents bite-sized takeaways instead of raw log walls. |
+
+---
+
+## 5. Non-Functional Requirements (NFRs)
+
+1. **Responsive Web Design:** Fully fluid UI optimized for desktop monitors (for deep schedule configuration) as well as mobile web browsers (for quick pauses and map checks).
+2. **Security & Encryption:** All client-server communication secured via TLS 1.3. Strict RBAC token verification ensuring cross-family data access is mathematically impossible.
+3. **High Availability:** Hosted on scalable cloud infrastructure (Vercel / AWS) with edge caching to guarantee sub-second dashboard load times.
+4. **Accessibility (a11y):** Compliance with WCAG 2.1 AA standards for high contrast, readable typography, and keyboard navigation.

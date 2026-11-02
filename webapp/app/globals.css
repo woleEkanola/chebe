@@ -1,0 +1,24 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@theme {
+  --color-pine: #0C5B40;
+  --color-pine-ink: #083B2A;
+  --color-paper: #F6F4EC;
+  --color-lime: #C9F16F;
+  --color-ink: #17211C;
+  --color-sage: #64756B;
+  --color-line: #E7E1D1;
+  --color-danger: #B3261E;
+}
+
+html, body { height: 100%; }
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.leaflet-container { border-radius: 14px; z-index: 0; }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import SetupWizard from "./components/SetupWizard";
 import TimePopover from "./components/TimePopover";
 import LockOverlay from "./components/LockOverlay";
@@ -21,6 +21,22 @@ export default function App() {
     setState({ view: "status", locked: true, lockReason: reason, unlockAt: "07:00" });
   const unlock = () =>
     setState({ view: "status", locked: false, remainingMins: 17, mode: "Free Time" });
+
+  // Real pipe events from the Rust shell (lock/unlock/warn/policy). No-op in browser dev.
+  useEffect(() => {
+    // @ts-expect-error — injected by Tauri at runtime
+    const ev = window.__TAURI__?.event;
+    if (!ev?.listen) return;
+    const unsubs: Array<() => void> = [];
+    ev.listen("chebe-lock", (e: { payload: { reason?: string; unlockAt?: string } }) =>
+      lock(e.payload?.reason ?? "bedtime")).then((u: () => void) => unsubs.push(u)).catch(() => {});
+    ev.listen("chebe-unlock", () => unlock()).then((u: () => void) => unsubs.push(u)).catch(() => {});
+    ev.listen("chebe-warn", (e: { payload: { message?: string } }) =>
+      setState((s) => (s.view === "status" ? { ...s, warn: e.payload?.message ?? "" } : s))
+    ).then((u: () => void) => unsubs.push(u)).catch(() => {});
+    return () => unsubs.forEach((u) => u());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (state.view === "setup") return <SetupWizard onDone={unlock} />;
 

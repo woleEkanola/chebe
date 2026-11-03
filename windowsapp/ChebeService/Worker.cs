@@ -15,18 +15,19 @@ public sealed class Worker : BackgroundService
     private readonly DnsFilter _dns;
     private readonly PipeServer _pipe;
     private readonly Watchdog _watchdog;
+    private readonly UsageReporter _usage;
     private readonly ILogger<Worker> _log;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
-    private string _backend = Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "https://api.chebe.example";
+    private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "http://localhost:3000";
     private DateTime _lastSync = DateTime.MinValue;
     private bool _warned5, _warned1;
 
     public Worker(RuleCache rules, ClockGuard clock, ProcessMonitor procs, DnsFilter dns,
-        PipeServer pipe, Watchdog watchdog, ILogger<Worker> log)
+        PipeServer pipe, Watchdog watchdog, UsageReporter usage, ILogger<Worker> log)
     {
         _rules = rules; _clock = clock; _procs = procs; _dns = dns;
-        _pipe = pipe; _watchdog = watchdog; _log = log;
+        _pipe = pipe; _watchdog = watchdog; _usage = usage; _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -95,7 +96,7 @@ public sealed class Worker : BackgroundService
         {
             var deviceId = _rules.Current?.DeviceId;
             if (string.IsNullOrEmpty(deviceId)) return; // not paired yet
-            var res = await _http.GetAsync($"{_backend}/v1/devices/{deviceId}/policy?v={_rules.Current!.PolicyVersion}", ct);
+            var res = await _http.GetAsync($"{Backend}/api/devices/{deviceId}/policy", ct);
             if (!res.IsSuccessStatusCode) return; // offline resilience: keep cache
             var json = await res.Content.ReadAsStringAsync(ct);
             var doc = JsonDocument.Parse(json);
@@ -103,6 +104,8 @@ public sealed class Worker : BackgroundService
             var bl = _rules.Current!.Blocklist;
             _dns.Apply(bl, _rules.Current.Whitelist);
             _pipe.Broadcast(new { type = "policy", policyVersion = _rules.Current.PolicyVersion, blocklistVersion = _rules.Current.BlocklistVersion });
+            // Push usage ledger so the dashboard shows real screen time
+            await _usage.PushAsync(deviceId, _procs.TodayUsage, ct);
         }
         catch (Exception ex) { _log.LogDebug(ex, "sync skipped (offline?)"); }
     }

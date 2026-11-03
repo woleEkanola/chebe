@@ -11,6 +11,7 @@ builder.Services.AddSingleton<ProcessMonitor>();
 builder.Services.AddSingleton<DnsFilter>();
 builder.Services.AddSingleton<PipeServer>();
 builder.Services.AddSingleton<PairingClient>();
+builder.Services.AddSingleton<UsageReporter>();
 builder.Services.AddSingleton<Watchdog>();
 builder.Services.AddHostedService<Worker>();
 

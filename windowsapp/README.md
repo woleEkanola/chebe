@@ -11,6 +11,8 @@ windowsapp/
   tools/            simulator.js (browser demo without Tauri)
 ```
 
+> All source targets the live webapp backend (`http://localhost:3000` by default,
+> override with the `CHEBE_BACKEND` env var on the service).
 > This machine has **no .NET SDK or Rust toolchain** (only Node), so nothing here was
 > compiled locally. All source is complete and buildable where the toolchains exist.
 
@@ -21,9 +23,13 @@ windowsapp/
 cd windowsapp/ChebeService
 dotnet publish -c Release
 # → bin/Release/net8.0-windows/win-x64/publish/ChebeService.exe (single-file, self-contained)
+# Point at the backend (default http://localhost:3000):
+[System.Environment]::SetEnvironmentVariable("CHEBE_BACKEND","http://<parent-pc>:3000","Machine")
 # Install as LocalSystem (Admin PowerShell):
 sc create ChebeService binPath= "<path>\ChebeService.exe" start= auto obj= LocalSystem
 sc start ChebeService
+# E2E check: pair via the client UI, then Instant Pause on the dashboard →
+# service policy poll flips to instantPaused within 30s and the lock overlay shows.
 ```
 
 ### 2. Client (needs Rust stable + Node 20+)
@@ -44,11 +50,11 @@ npm run tauri build  # → src-tauri/target/release/bundle/
 
 | PRD | Implementation |
 |---|---|
-| 4.1 Pairing | `SetupWizard.tsx` + `PairingClient.cs` (demo code `482-913`) |
-| 4.2 Schedules/limits | `RuleCache.cs` (DPAPI) + `Worker.cs` 15s eval + `ProcessMonitor.cs` + `LockOverlay.tsx` + `WarnToast.tsx` |
+| 4.1 Pairing | `SetupWizard.tsx` → Tauri `pair_device` → pipe `pair` frame → `PairingClient.cs` → `POST /api/pairing/link` (browser dev posts directly) |
+| 4.2 Schedules/limits | `RuleCache.cs` (DPAPI, full `/api/devices/:id/policy` parse) + `Worker.cs` 15s eval + `ProcessMonitor.cs` (seconds ledger) + `UsageReporter.cs` → `POST /api/usage` + `LockOverlay.tsx` + `WarnToast.tsx` |
 | 4.3 Web filter | `DnsFilter.cs` (hosts markers `# CHEBE-BEGIN/END`), <5s apply |
-| 4.4 Tamper resistance | LocalSystem service, `ClockGuard.cs` (QPC anchor), `Watchdog.cs` (1s relaunch), uninstall token in `chebe.iss` |
-| 4.5 Tray + SOS | `main.rs` tray menu + `TimePopover.tsx` + `SosButton.tsx` (2s hold) |
+| 4.4 Tamper resistance | LocalSystem service, `ClockGuard.cs` (QPC anchor), `Watchdog.cs` (1s relaunch), `lock_hook` in `main.rs` (Win/Alt+Tab/Alt+Esc suppression while locked), uninstall token in `chebe.iss` |
+| 4.5 Tray + SOS | `main.rs` tray menu + pipe RPC `send_sos` → service relays `POST /api/alerts` (works during lock) + `TimePopover.tsx` + `SosButton.tsx` (2s hold) |
 | NFR 2 IPC | `PipeServer.cs` ↔ `pipe_listener` in `main.rs`, token in `%PROGRAMDATA%\Chebe\session.token` |
 
 ## Dev without Windows toolchains

@@ -11,7 +11,17 @@ public sealed class ProcessMonitor
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
 
-    public Dictionary<string,int> TodayUsage { get; } = new(StringComparer.OrdinalIgnoreCase);
+    // Seconds-accurate ledger; TodayUsage exposes whole minutes (gap-tolerant: any
+    // tick attributes its full quantum to the foreground exe, matching poll cadence).
+    private readonly Dictionary<string, double> _seconds = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> TodayUsage
+    {
+        get
+        {
+            if (DateTime.Today != _day) { _day = DateTime.Today; _seconds.Clear(); }
+            return _seconds.ToDictionary(kv => kv.Key, kv => (int)(kv.Value / 60), StringComparer.OrdinalIgnoreCase);
+        }
+    }
     private DateTime _day = DateTime.Today;
 
     public string GetForegroundExe()
@@ -28,9 +38,9 @@ public sealed class ProcessMonitor
 
     public void Account(string exe, TimeSpan quantum)
     {
-        if (DateTime.Today != _day) { _day = DateTime.Today; TodayUsage.Clear(); }
+        if (DateTime.Today != _day) { _day = DateTime.Today; _seconds.Clear(); }
         if (string.IsNullOrEmpty(exe)) return;
-        TodayUsage[exe] = TodayUsage.TryGetValue(exe, out var m) ? m + (int)quantum.TotalMinutes + 1 : 1;
+        _seconds[exe] = _seconds.TryGetValue(exe, out var s) ? s + quantum.TotalSeconds : quantum.TotalSeconds;
     }
 
     public void CloseOrMinimize(string exe)

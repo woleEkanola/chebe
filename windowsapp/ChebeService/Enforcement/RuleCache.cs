@@ -70,11 +70,50 @@ public sealed class RuleCache
 
     public void ApplyServerPolicy(JsonElement root)
     {
-        // Minimal tolerant parser; production maps full contract from packages/contracts
+        // Full policy contract from webapp GET /api/devices/:id/policy
         try
         {
-            if (root.TryGetProperty("policyVersion", out var pv)) Current!.PolicyVersion = pv.GetInt32();
+            if (Current is null) return;
+            if (root.TryGetProperty("policyVersion", out var pv)) Current.PolicyVersion = pv.GetInt32();
             if (root.TryGetProperty("instantPaused", out var ip)) InstantPaused = ip.GetBoolean();
+            if (root.TryGetProperty("blocklistVersion", out var bv)) Current.BlocklistVersion = bv.GetInt32();
+            if (root.TryGetProperty("schedules", out var sch) && sch.ValueKind == JsonValueKind.Array)
+            {
+                var list = new List<ScheduleRule>();
+                foreach (var s in sch.EnumerateArray())
+                {
+                    try
+                    {
+                        list.Add(new ScheduleRule(
+                            s.GetProperty("id").GetString() ?? Guid.NewGuid().ToString("N"),
+                            s.GetProperty("label").GetString() ?? "Block",
+                            s.TryGetProperty("days", out var d) ? d.EnumerateArray().Select(x => x.GetInt32()).ToArray() : new[] { 0, 1, 2, 3, 4 },
+                            s.GetProperty("start").GetString() ?? "21:00",
+                            s.GetProperty("end").GetString() ?? "07:00",
+                            s.TryGetProperty("shieldLevel", out var sl) ? (sl.GetString() ?? "full") : "full"));
+                    }
+                    catch { /* skip malformed row */ }
+                }
+                if (list.Count > 0) Current.Schedules = list;
+            }
+            if (root.TryGetProperty("appLimits", out var al) && al.ValueKind == JsonValueKind.Array)
+            {
+                var dict = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var a in al.EnumerateArray())
+                {
+                    try
+                    {
+                        var pkg = a.GetProperty("pkg").GetString();
+                        if (!string.IsNullOrEmpty(pkg)) dict[pkg] = a.GetProperty("limitMins").GetInt32();
+                    }
+                    catch { /* skip malformed row */ }
+                }
+                Current.AppLimits = dict;
+            }
+            if (root.TryGetProperty("blocklist", out var bl) && bl.ValueKind == JsonValueKind.Array)
+                Current.Blocklist = bl.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList();
+            if (root.TryGetProperty("whitelist", out var wl) && wl.ValueKind == JsonValueKind.Array)
+                Current.Whitelist = wl.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList();
             Save();
         }
         catch { /* keep cache */ }

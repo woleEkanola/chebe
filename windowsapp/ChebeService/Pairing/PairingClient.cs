@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+using System.Net.Http.Json;
+
 namespace ChebeService.Pairing;
 
 /// <summary>First-time setup: POST 6-digit code → binds deviceId to parent tenant (PRD 4.1).</summary>

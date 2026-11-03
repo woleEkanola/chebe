@@ -1,10 +1,12 @@
 /* Seed demo family (Ama + Alex + Sarah). Run: npx prisma db seed
  * Requires: prisma generate + a running local Postgres + DATABASE_URL
  */
-const { PrismaClient } = require("@prisma/client");
-const bcrypt = require("bcryptjs");
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import bcrypt from "bcryptjs";
 
-const db = new PrismaClient();
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const db = new PrismaClient({ adapter });
 
 async function main() {
   await db.alert.deleteMany();

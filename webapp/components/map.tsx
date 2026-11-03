@@ -11,9 +11,13 @@ const MapInner = dynamic(() => import("./map-inner"), { ssr: false });
 const FALLBACK = { lat: 6.5244, lng: 3.3792 };
 
 export function MapSection() {
-  const { children, geofences, loading, pushToast } = useChebe();
+  const { children, geofences, loading, pushToast, refresh } = useChebe();
   const [activeChild, setActiveChild] = useState<string | null>(null);
   const [radius, setRadius] = useState(200);
+  const [pick, setPick] = useState<{ lat: number; lng: number } | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [label, setLabel] = useState("Home");
+  const [saving, setSaving] = useState(false);
 
   const child = useMemo(
     () => children.find((c) => c.id === activeChild) ?? children[0] ?? null,
@@ -45,12 +49,56 @@ export function MapSection() {
   const lat = loc?.lat ?? FALLBACK.lat;
   const lng = loc?.lng ?? FALLBACK.lng;
 
+  const saveZone = async (usePicked: boolean) => {
+    const base = usePicked && pick ? pick : loc ? { lat: loc.lat, lng: loc.lng } : null;
+    if (!base) {
+      pushToast("No location to anchor the zone — pick a point on the map.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/geofences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label.trim() || "Zone", lat: base.lat, lng: base.lng, radiusM: radius }),
+      });
+      if (!res.ok) throw new Error("Save failed.");
+      setPick(null);
+      setPicking(false);
+      pushToast(`Zone saved — entry/exit pushes active`);
+      refresh();
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : "Save failed.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeZone = async (id: string) => {
+    try {
+      const res = await fetch(`/api/geofences/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed.");
+      pushToast("Zone removed");
+      refresh();
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : "Delete failed.");
+    }
+  };
+
   return (
     <div className="grid gap-3 lg:grid-cols-[1fr_300px]">
       <Card className="!p-2">
         <div className="h-[420px] overflow-hidden rounded-xl">
-          <MapInner lat={lat} lng={lng} radius={radius} name={child.name} />
+          <MapInner
+            lat={lat}
+            lng={lng}
+            radius={radius}
+            name={child.name}
+            pick={pick}
+            onPick={picking ? (a, b) => setPick({ lat: a, lng: b }) : undefined}
+          />
         </div>
+        {picking && <div className="px-1 pt-2 text-xs font-bold text-[#0C5B40]">Picking mode — click anywhere on the map to anchor the zone.</div>}
       </Card>
       <div className="space-y-3">
         <Card>
@@ -78,12 +126,19 @@ export function MapSection() {
           </div>
         </Card>
         <Card>
-          <div className="font-extrabold">Geofence · Home</div>
-          <div className="mt-1 text-xs text-[#64756B]">
-            {geofences.length > 0
-              ? `Saved: ${geofences.map((g) => `${g.label} (${g.radiusM}m)`).join(" · ")}`
-              : "No zones saved yet — set one below."}{" "}
-            Circle below is a preview; manage zones in Routines v1.1.
+          <div className="font-extrabold">Safe zones</div>
+          <div className="mt-1 text-xs text-[#64756B]">Entry / exit triggers a push on next device sync.</div>
+          <div className="mt-2 space-y-1.5">
+            {geofences.length === 0 && <div className="text-xs text-[#64756B]">No zones yet.</div>}
+            {geofences.map((g) => (
+              <div key={g.id} className="flex items-center justify-between rounded-xl bg-[#F6F4EC] px-3 py-2 text-[13px]">
+                <span className="font-semibold">{g.label} <span className="font-normal text-[#64756B]">· {g.radiusM}m</span></span>
+                <button onClick={() => removeZone(g.id)} className="text-xs font-bold text-[#B3261E]">Remove</button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex gap-2">
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Zone name" className="w-full rounded-xl border-[1.5px] border-[#E7E1D1] px-3 py-2 text-sm outline-none focus:border-[#0C5B40]" />
           </div>
           <div className="mt-2 flex items-center justify-between text-sm">
             <b>Radius</b>
@@ -91,6 +146,14 @@ export function MapSection() {
           </div>
           <input type="range" min={100} max={500} step={10} value={radius} onChange={(e) => setRadius(Number(e.target.value))} className="mt-1 w-full accent-[#0C5B40]" />
           <div className="mt-1 text-[11px] text-[#64756B]">Min 100 m to avoid GPS drift flapping · dwell 2 min.</div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button onClick={() => setPicking((p) => !p)} className={`rounded-xl py-2.5 text-[13px] font-bold ${picking ? "bg-[#083B2A] text-white" : "bg-[#F0EBDB] text-[#083B2A]"}`}>
+              {picking ? "Picking… tap map" : "Pick on map"}
+            </button>
+            <button onClick={() => saveZone(!!pick)} disabled={saving} className="rounded-xl bg-[#0C5B40] py-2.5 text-[13px] font-bold text-white disabled:opacity-60">
+              {saving ? "Saving…" : pick ? "Save picked zone" : "Save at child"}
+            </button>
+          </div>
         </Card>
         <Card>
           <div className="font-extrabold">Emergency SOS</div>

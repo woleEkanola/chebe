@@ -78,6 +78,24 @@ async function main() {
     data: { childId: alex.id, lat: 6.5244, lng: 3.3792, accuracyM: 8 },
   });
 
+  // A week of usage so ScreenTime/Weekly cards render real shapes
+  const pkgs = [
+    { childId: alex.id, pkg: "com.google.youtube", label: "YouTube", base: 64 },
+    { childId: alex.id, pkg: "com.roblox.client", label: "Roblox", base: 48 },
+    { childId: sarah.id, pkg: "org.khankids.app", label: "Khan Kids", base: 31 },
+  ];
+  for (let i = 6; i >= 0; i--) {
+    const day = new Date(Date.now() - i * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const jitter = [0.7, 1.1, 0.9, 1.2, 1.35, 0.85, 1.0][6 - i];
+    for (const p of pkgs) {
+      await db.usageDaily.upsert({
+        where: { childId_pkg_day: { childId: p.childId, pkg: p.pkg, day } },
+        create: { childId: p.childId, pkg: p.pkg, day, mins: Math.round(p.base * jitter) },
+        update: { mins: Math.round(p.base * jitter) },
+      });
+    }
+  }
+
   await db.geofence.create({ data: { familyId: family.id, label: "Home", lat: 6.5244, lng: 3.3792, radiusM: 200 } });
   await db.webFilter.create({ data: { familyId: family.id } });
   await db.pairingCode.create({

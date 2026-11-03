@@ -1,9 +1,11 @@
 import { db } from "@/lib/server/db";
 import { bad, ok } from "@/lib/server/util";
 import { createSession, hashPassword } from "@/lib/server/auth";
+import { clientIp, rateLimit } from "@/lib/server/ratelimit";
 
 // POST /api/auth/register { email, password, name?, familyName? }
 export async function POST(req: Request) {
+  if (!rateLimit(`register:${clientIp(req)}`, 5)) return bad("Too many attempts. Try again in a minute.", 429);
   const body = await req.json().catch(() => null);
   const email = String(body?.email ?? "").trim().toLowerCase();
   const password = String(body?.password ?? "");

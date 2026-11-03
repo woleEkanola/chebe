@@ -1,9 +1,13 @@
 import { db } from "@/lib/server/db";
 import { bad, ok } from "@/lib/server/util";
+import { runCleanup } from "@/lib/server/cleanup";
+import { clientIp, rateLimit } from "@/lib/server/ratelimit";
 
 // POST /api/pairing/link { code, platform?, label, childId? }
 // Public: the 6-digit code IS the credential. Binds a device to the family tenant.
 export async function POST(req: Request) {
+  if (!rateLimit(`link:${clientIp(req)}`, 10)) return bad("Too many attempts. Try again in a minute.", 429);
+  await runCleanup().catch(() => null); // lazy expiry sweep
   const body = await req.json().catch(() => null);
   const digits = String(body?.code ?? "").replace(/\D/g, "");
   if (digits.length < 6) return bad("Enter the 6-digit code.");

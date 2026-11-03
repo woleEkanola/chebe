@@ -1,10 +1,28 @@
 "use client";
 
 import { useEffect } from "react";
-import { Circle, MapContainer, Marker, TileLayer } from "react-leaflet";
+import { Circle, MapContainer, Marker, TileLayer, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 
-export default function MapInner({ lat, lng, radius, name }: { lat: number; lng: number; radius: number; name: string }) {
+function ClickPicker({ onPick }: { onPick?: (lat: number, lng: number) => void }) {
+  useMapEvents({
+    click(e) {
+      onPick?.(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+}
+
+export default function MapInner({
+  lat, lng, radius, name, pick, onPick,
+}: {
+  lat: number;
+  lng: number;
+  radius: number;
+  name: string;
+  pick?: { lat: number; lng: number } | null;
+  onPick?: (lat: number, lng: number) => void;
+}) {
   useEffect(() => {
     // fix default marker icons in Next
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -21,6 +39,8 @@ export default function MapInner({ lat, lng, radius, name }: { lat: number; lng:
       <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
       <Circle center={[lat, lng]} radius={radius} pathOptions={{ color: "#0C5B40", dashArray: "7 6", fillOpacity: 0.08 }} />
       <Marker position={[lat, lng]} />
+      {pick && <Marker position={[pick.lat, pick.lng]} opacity={0.7} />}
+      <ClickPicker onPick={onPick} />
     </MapContainer>
   );
 }

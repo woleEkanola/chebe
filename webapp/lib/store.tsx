@@ -47,6 +47,13 @@ export interface ApiLimit {
   limitMins: number;
 }
 
+export interface ApiUsageChild {
+  childId: string;
+  name: string;
+  today: number;
+  week: Record<string, number>;
+  top: Record<string, { label: string; mins: number }>;
+}
 export interface ApiGeofence {
   id: string;
   label: string;
@@ -78,6 +85,7 @@ interface ChebeState {
   alerts: ApiAlert[];
   limits: ApiLimit[];
   geofences: ApiGeofence[];
+  usage: ApiUsageChild[];
   paused: Record<string, boolean>;
   globalPause: boolean;
   bonusLog: string;
@@ -131,6 +139,7 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
   const [alerts, setAlerts] = useState<ApiAlert[]>([]);
   const [limits, setLimits] = useState<ApiLimit[]>([]);
   const [geofences, setGeofences] = useState<ApiGeofence[]>([]);
+  const [usage, setUsage] = useState<ApiUsageChild[]>([]);
   const [bonusLog, setBonusLog] = useState("No bonus granted yet today.");
   const [toasts, setToasts] = useState<string[]>([]);
   const [messages, setMessages] = useState<ChatMsg[]>([
@@ -147,16 +156,18 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [c, a, l, g] = await Promise.all([
+      const [c, a, l, g, u] = await Promise.all([
         j<{ children: ApiChild[] }>("/api/children"),
         j<{ alerts: ApiAlert[] }>("/api/alerts"),
         j<{ limits: ApiLimit[] }>("/api/applimits"),
         j<{ geofences: ApiGeofence[] }>("/api/geofences"),
+        j<{ usage: ApiUsageChild[] }>("/api/usage"),
       ]);
       setChildList(c.children);
       setAlerts(a.alerts);
       setLimits(l.limits);
       setGeofences(g.geofences);
+      setUsage(u.usage);
     } catch {
       /* session redirect handled in j() */
     }
@@ -291,12 +302,12 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({
-      userName, loading, children: childList, alerts, limits, geofences,
+      userName, loading, children: childList, alerts, limits, geofences, usage,
       paused, globalPause, bonusLog, toasts, messages,
       togglePause, toggleGlobalPause, grantBonus, resolveAlert, setAppLimit,
       pushToast, dismissToast, sendChat, refresh,
     }),
-    [userName, loading, childList, alerts, limits, geofences, paused, globalPause, bonusLog, toasts, messages,
+    [userName, loading, childList, alerts, limits, geofences, usage, paused, globalPause, bonusLog, toasts, messages,
       togglePause, toggleGlobalPause, grantBonus, resolveAlert, setAppLimit, pushToast, dismissToast, sendChat, refresh]
   );
 

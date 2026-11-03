@@ -2,15 +2,39 @@
 
 import { useMemo, useState } from "react";
 import { Card, Switch } from "./chrome";
-import { useChebe } from "@/lib/store";
-import { alerts as seedAlerts, children as seedChildren } from "@/lib/mock";
+import { deviceOnline, timeAgo, useChebe } from "@/lib/store";
 
 export function FamilyGrid() {
-  const { paused, togglePause, globalPause } = useChebe();
+  const { children, alerts, loading, paused, togglePause } = useChebe();
+  if (loading && children.length === 0) {
+    return (
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {[0, 1].map((i) => (
+          <Card key={i}>
+            <div className="animate-pulse text-sm text-[#64756B]">Loading family…</div>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+  if (children.length === 0) {
+    return (
+      <Card>
+        <div className="font-extrabold">No children yet</div>
+        <div className="text-xs text-[#64756B]">
+          Add a profile under Children, then pair a device to see it here.
+        </div>
+      </Card>
+    );
+  }
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {seedChildren.map((c) => {
-        const isPaused = globalPause || paused[c.id];
+      {children.map((c) => {
+        const isPaused = paused[c.id];
+        const openAlerts = alerts.filter((a) => a.childId === c.id && a.status === "open").length;
+        const seen = c.devices.map((d) => d.lastSeenAt).filter(Boolean).sort().pop() as string | undefined;
+        const online = c.devices.some(deviceOnline);
+        const primary = c.devices[0];
         return (
           <Card key={c.id}>
             <div className="flex items-center gap-3">
@@ -22,7 +46,7 @@ export function FamilyGrid() {
                   {c.name} · {c.age}
                 </div>
                 <div className="truncate text-xs text-[#64756B]">
-                  {c.device} · policy v{c.policyVersion}
+                  {primary ? `${primary.label} · policy v${primary.policyVersion}` : "No device paired"}
                 </div>
               </div>
               <span
@@ -30,21 +54,21 @@ export function FamilyGrid() {
                   isPaused ? "bg-[#FAEED3] text-[#8A5A12]" : "bg-[#E3EFE7] text-[#083B2A]"
                 }`}
               >
-                ● {isPaused ? "Paused" : c.status === "online" ? "Active" : "Offline"}
+                ● {isPaused ? "Paused" : online ? "Active" : "Offline"}
               </span>
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
               <div className="rounded-lg bg-[#F6F4EC] p-2">
-                <div className="font-extrabold">{c.activeApp}</div>
-                <div className="text-[#64756B]">Active app</div>
+                <div className="font-extrabold">{c.devices.length}</div>
+                <div className="text-[#64756B]">Devices</div>
               </div>
               <div className="rounded-lg bg-[#F6F4EC] p-2">
-                <div className="font-extrabold">{c.battery}%</div>
-                <div className="text-[#64756B]">Battery</div>
+                <div className="font-extrabold">{openAlerts}</div>
+                <div className="text-[#64756B]">Open alerts</div>
               </div>
               <div className="rounded-lg bg-[#F6F4EC] p-2">
-                <div className="truncate font-extrabold">{c.scheduleMode}</div>
-                <div className="text-[#64756B]">Mode</div>
+                <div className="truncate font-extrabold">{timeAgo(seen ?? null)}</div>
+                <div className="text-[#64756B]">Last seen</div>
               </div>
             </div>
             <div className="mt-3 flex items-center justify-between border-t border-[#EFEAD9] pt-3">
@@ -83,23 +107,24 @@ const sevColor: Record<string, string> = {
 
 export function AlertFeed({ compact = false }: { compact?: boolean }) {
   const { alerts, resolveAlert } = useChebe();
-  const [open, setOpen] = useState<string | null>("a1");
+  const [open, setOpen] = useState<string | null>(null);
   const list = compact ? alerts.slice(0, 3) : alerts;
   const openCount = useMemo(() => alerts.filter((a) => a.status === "open").length, [alerts]);
   return (
     <Card>
       <div className="mb-2 flex items-center justify-between">
         <div className="font-extrabold">Recent alerts {openCount > 0 && <span className="ml-1 rounded-full bg-[#B3261E] px-2 py-0.5 text-[11px] text-white">{openCount} open</span>}</div>
-        <span className="text-xs text-[#64756B]">Live · WebSocket</span>
+        <span className="text-xs text-[#64756B]">Live · 30s poll</span>
       </div>
+      {list.length === 0 && <div className="py-4 text-center text-xs text-[#64756B]">No alerts — all quiet.</div>}
       {list.map((a) => (
         <div key={a.id} className="border-t border-[#EFEAD9] py-3 first:border-t-0">
           <button className="flex w-full items-start gap-3 text-left" onClick={() => setOpen(open === a.id ? null : a.id)}>
-            <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${sevColor[a.severity]}`} />
+            <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${sevColor[a.severity] ?? sevColor.low}`} />
             <span className="min-w-0 flex-1">
               <span className="flex items-center justify-between gap-2">
                 <b className="truncate text-sm">{a.title}</b>
-                <span className="shrink-0 text-xs text-[#64756B]">{a.time}</span>
+                <span className="shrink-0 text-xs text-[#64756B]">{new Date(a.createdAt).toLocaleString()}</span>
               </span>
               <span className="mt-0.5 block text-xs text-[#64756B]">{a.detail}</span>
               {a.snippet && (
@@ -162,33 +187,32 @@ export function ScreenTimeCard() {
 }
 
 export function WeeklyCard() {
-  const rows = [
-    { name: "YouTube", t: "1h 04m", pct: 72 },
-    { name: "Roblox", t: "48m", pct: 52 },
-    { name: "Khan Kids", t: "31m · learning", pct: 34 },
-  ];
+  const { alerts, limits } = useChebe();
+  const open = alerts.filter((a) => a.status === "open").length;
+  const resolved = alerts.filter((a) => a.status === "resolved").length;
   return (
     <Card>
-      <div className="text-xs font-bold uppercase tracking-wider text-[#64756B]">Nov 3–9 · Weekly wrap-up</div>
-      <div className="mt-1 text-2xl font-extrabold tracking-tight">Trending calmer.</div>
-      <div className="text-xs text-[#64756B]">3h 12m avg/day · down 11% vs last week.</div>
+      <div className="text-xs font-bold uppercase tracking-wider text-[#64756B]">Safety summary · live</div>
+      <div className="mt-1 text-2xl font-extrabold tracking-tight">
+        {open === 0 ? "All quiet." : `${open} open alert${open === 1 ? "" : "s"}`}
+      </div>
+      <div className="text-xs text-[#64756B]">{resolved} resolved with guidance · trends, not raw logs.</div>
       <div className="mt-3 space-y-2.5">
-        {rows.map((r) => (
-          <div key={r.name}>
+        {limits.slice(0, 3).map((r) => (
+          <div key={r.id}>
             <div className="flex justify-between text-[13px]">
-              <span className="font-semibold">{r.name}</span>
-              <span className="text-[#64756B]">{r.t}</span>
+              <span className="font-semibold">{r.label}</span>
+              <span className="text-[#64756B]">{r.limitMins} min/day</span>
             </div>
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[#EEE8D4]">
-              <div className="h-full rounded-full bg-[#0C5B40]" style={{ width: `${r.pct}%` }} />
+              <div className="h-full rounded-full bg-[#0C5B40]" style={{ width: `${Math.min(100, (r.limitMins / 120) * 100)}%` }} />
             </div>
           </div>
         ))}
+        {limits.length === 0 && (
+          <div className="text-xs text-[#64756B]">No app limits set yet — add them under Routines.</div>
+        )}
       </div>
     </Card>
   );
-}
-
-export function Unused() {
-  return <>{seedAlerts.length}</>;
 }

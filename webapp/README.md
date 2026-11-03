@@ -29,7 +29,7 @@ Open http://localhost:3000 → sign in with the seeded account (or register a ne
 
 ## Mock layer
 
-- `lib/mock.ts` — children, alerts, app inventory, weekly data
+- `lib/mock.ts` — legacy static demo data (no longer used by the UI; kept for reference)
 - `lib/store.tsx` — `ChebeProvider`: pause state, bonus, alerts, app limits, chat, toasts
 - No backend calls yet. To wire Nest: replace `store.tsx` actions with `fetch` to `POST /commands/pause`, `PUT /policies/schedules`, `POST /assistant/chat`, plus a WebSocket client for live status/location/alerts.
 

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ChebeClient",
+  "version": "1.0.0",
+  "identifier": "com.chebe.client",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Chebe",
+        "width": 420,
+        "height": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "trayIcon": { "iconPath": "icons/tray.png", "iconAsTemplate": true, "tooltip": "Chebe — 17 min left · Free Time" },
+    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "windows": { "nsis": { "installMode": "perMachine" } }
+  }
+}

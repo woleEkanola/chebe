@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Chebe IPC Protocol (Named Pipe \\.\\pipe\\chebe-service)",
+  "description": "Line-delimited JSON messages between ChebeService.exe (server) and ChebeClient.exe (client).",
+  "types": [
+    {
+      "name": "PolicyUpdate",
+      "direction": "service -> client",
+      "example": { "type": "policy", "policyVersion": 13, "schedules": [], "appLimits": [], "blocklistVersion": 7 }
+    },
+    {
+      "name": "Lock",
+      "direction": "service -> client",
+      "example": { "type": "lock", "reason": "bedtime|pause|limit", "message": "Bedtime shield is on", "unlockAt": "07:00" }
+    },
+    {
+      "name": "Unlock",
+      "direction": "service -> client",
+      "example": { "type": "unlock", "policyVersion": 13 }
+    },
+    {
+      "name": "Warn",
+      "direction": "service -> client",
+      "example": { "type": "warn", "secondsLeft": 300, "message": "5 minutes of screen time remaining" }
+    },
+    {
+      "name": "Status",
+      "direction": "service -> client (poll reply)",
+      "example": { "type": "status", "paused": false, "mode": "Free Time", "remainingMins": 17, "policyVersion": 12 }
+    },
+    {
+      "name": "SosAck",
+      "direction": "service -> client",
+      "example": { "type": "sos-ack", "ok": true }
+    },
+    {
+      "name": "Sos",
+      "direction": "client -> service",
+      "example": { "type": "sos", "childId": "alex", "ts": "2026-11-03T10:00:00Z", "note": "optional" }
+    },
+    {
+      "name": "Hello",
+      "direction": "client -> service",
+      "example": { "type": "hello", "sessionToken": "local-session-token", "version": "1.0.0" }
+    }
+  ],
+  "auth": "First frame from client must be Hello with the per-boot session token written by the service to %PROGRAMDATA%\\Chebe\\session.token (ACL: SYSTEM + current logon user). Unauthenticated frames are dropped.",
+  "transport": "Named pipe \\\\.\\pipe\\chebe-service, duplex, UTF-8 line-delimited JSON, reconnect with 1s backoff."
+}

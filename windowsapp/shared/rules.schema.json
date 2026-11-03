@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Chebe rules.json (DPAPI-encrypted local cache)",
+  "type": "object",
+  "required": ["policyVersion", "blocklistVersion", "schedules", "appLimits", "blocklist", "whitelist"],
+  "properties": {
+    "policyVersion": { "type": "integer", "example": 12 },
+    "blocklistVersion": { "type": "integer", "example": 7 },
+    "deviceId": { "type": "string", "example": "dev_alex_laptop" },
+    "childId": { "type": "string", "example": "alex" },
+    "tenantId": { "type": "string", "example": "fam_ama" },
+    "schedules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "days", "start", "end", "shieldLevel"],
+        "properties": {
+          "id": { "type": "string", "example": "bedtime" },
+          "label": { "type": "string", "example": "Bedtime" },
+          "days": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 6 }, "example": [0, 1, 2, 3, 4] },
+          "start": { "type": "string", "example": "21:00" },
+          "end": { "type": "string", "example": "07:00" },
+          "shieldLevel": { "type": "string", "enum": ["full", "school", "homework"] }
+        }
+      }
+    },
+    "appLimits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["exe", "label", "limitMins"],
+        "properties": {
+          "exe": { "type": "string", "example": "chrome.exe" },
+          "label": { "type": "string", "example": "Chrome" },
+          "limitMins": { "type": "integer", "example": 60 }
+        }
+      }
+    },
+    "blocklist": { "type": "array", "items": { "type": "string" }, "example": ["gamble-arcade.example", "adult-example.test"] },
+    "whitelist": { "type": "array", "items": { "type": "string" }, "example": ["khanacademy.org"] }
+  }
+}

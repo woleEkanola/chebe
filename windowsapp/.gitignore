@@ -1,0 +1,19 @@
+node_modules/
+dist/
+# Rust / Tauri
+target/
+# .NET
+bin/
+obj/
+*.user
+.vs/
+# Tauri bundles (built artifacts)
+*.exe
+*.msi
+*.nsis.zip
+# OS
+.DS_Store
+Thumbs.db
+# Secrets / local
+*.token
+rules.json.protected

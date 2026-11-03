@@ -1,16 +1,19 @@
-# Chebe — Parent Web Dashboard
+# Chebe — Parent Web Dashboard + Backend
 
-Next.js (App Router) + Tailwind v4 + Leaflet. Mock-first implementation of `webapp.prd`.
+Next.js (App Router) + Tailwind v4 + Leaflet + **Prisma + local Postgres + JWT auth**. Poll-only sync (no push infra).
 
-## Run
+## Backend setup (local Postgres)
 
 ```bash
 cd webapp
-npm install
-npm run dev      # webpack mode (Turbopack native binding broken on this Win32 box)
+cp .env.example .env        # edit DATABASE_URL + JWT_SECRET
+createdb chebe               # if the DB doesn't exist yet
+npx prisma migrate dev       # or: npm run db:push (no migration files)
+npm run db:seed              # demo family: ama@example.com / password123
+npm run dev
 ```
 
-Open http://localhost:3000
+Open http://localhost:3000 → sign in with the seeded account (or register a new family).
 
 ## Routes (all PRD flows)
 

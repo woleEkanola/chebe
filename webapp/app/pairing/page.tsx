@@ -1,29 +1,48 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Shell } from "@/components/shell";
 import { Topbar, Card } from "@/components/chrome";
-import { pairingCode } from "@/lib/mock";
 import { useChebe } from "@/lib/store";
 
 export default function PairingPage() {
   const { pushToast } = useChebe();
-  const [code, setCode] = useState(pairingCode);
+  const [code, setCode] = useState("------");
   const [entered, setEntered] = useState("");
   const [linked, setLinked] = useState(false);
+  const [linkedLabel, setLinkedLabel] = useState("");
 
-  const regen = () => {
-    const c = `${Math.floor(100 + Math.random() * 900)}-${Math.floor(100 + Math.random() * 900)}`;
-    setCode(c);
-    pushToast("New pairing code generated (5-min TTL)");
+  const regen = async () => {
+    try {
+      const res = await fetch("/api/pairing/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed");
+      setCode(data.code);
+      pushToast("New pairing code generated (5-min TTL)");
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : "Backend not migrated? See README.");
+    }
   };
 
-  const link = () => {
-    if (entered.replace(/\D/g, "").length >= 6) {
+  useEffect(() => {
+    regen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const link = async () => {
+    try {
+      const res = await fetch("/api/pairing/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: entered, platform: "windows", label: "Test device" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Link failed");
       setLinked(true);
+      setLinkedLabel(data.device?.label ?? "Device");
       pushToast("Device linked to your family tenant");
-    } else {
-      pushToast("Enter the 6-digit code shown on the child device");
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : "Link failed.");
     }
   };
 
@@ -52,7 +71,7 @@ export default function PairingPage() {
             <input value={entered} onChange={(e) => setEntered(e.target.value)} placeholder="e.g. 482-913" className="flex-1 rounded-xl border-[1.5px] border-[#E7E1D1] px-3 py-2.5 font-mono text-sm outline-none focus:border-[#0C5B40]" />
             <button onClick={link} className="rounded-xl bg-[#C9F16F] px-4 py-2.5 text-sm font-extrabold text-[#1C3405]">Link</button>
           </div>
-          {linked && <div className="mt-2 rounded-xl bg-[#E3EFE7] p-3 text-sm font-semibold text-[#083B2A]">✓ Linked — “Alex's Laptop” bound to family tenant.</div>}
+          {linked && <div className="mt-2 rounded-xl bg-[#E3EFE7] p-3 text-sm font-semibold text-[#083B2A]">✓ Linked — “{linkedLabel}” bound to family tenant.</div>}
         </Card>
       </div>
     </Shell>

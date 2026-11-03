@@ -6,9 +6,19 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node prisma/seed.mjs"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.mjs"
   },
   "dependencies": {
+    "@prisma/client": "^7.10.1",
+    "bcryptjs": "^3.0.3",
+    "jose": "^6.2.15",
     "leaflet": "^1.9.4",
     "next": "16.4.4",
     "react": "19.3.0",

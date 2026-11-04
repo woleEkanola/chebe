@@ -14,7 +14,7 @@ export async function GET(req: Request) {
     select: { id: true, name: true },
   });
   if (!kids.length) return ok({ usage: [] });
-  const ids = kids.map((k) => k.id);
+  const ids = kids.map((k: { id: string }) => k.id);
 
   const today = todayKey();
   const weekAgo = new Date(Date.now() - 6 * 24 * 3600 * 1000).toISOString().slice(0, 10);
@@ -23,7 +23,7 @@ export async function GET(req: Request) {
     where: { childId: { in: ids }, day: { gte: weekAgo } },
   });
 
-  const usage = kids.map((k) => {
+  const usage = kids.map((k: { id: string; name: string }) => {
     const mine = rows.filter((r) => r.childId === k.id);
     const byDay: Record<string, number> = {};
     for (let i = 6; i >= 0; i--) {

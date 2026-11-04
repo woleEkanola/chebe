@@ -138,7 +138,7 @@ async fn send_sos(_child_id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn set_lock_hook(enabled: boolean) {
+fn set_lock_hook(enabled: bool) {
     lock_hook::set(enabled);
 }
 
@@ -149,7 +149,11 @@ mod lock_hook {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::*;
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW,
+        UnhookWindowsHookEx, WM_KEYDOWN, WM_SYSKEYDOWN, WH_KEYBOARD_LL,
+    };
 
     static ENABLED: AtomicBool = AtomicBool::new(false);
     static HOOK: Mutex<isize> = Mutex::new(0);
@@ -161,11 +165,11 @@ mod lock_hook {
             if down {
                 let vk = kb.vkCode;
                 // Alt state at hook time
-                let alt = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
-                let blocked = vk == VK_LWIN.0 as u32
-                    || vk == VK_RWIN.0 as u32
-                    || (vk == VK_TAB.0 as u32 && alt)
-                    || (vk == VK_ESCAPE.0 as u32 && alt);
+                let alt = (GetAsyncKeyState(0x12) as u16 & 0x8000) != 0;
+                let blocked = vk == 0x5B
+                    || vk == 0x5C
+                    || (vk == 0x09 && alt)
+                    || (vk == 0x1B && alt);
                 if blocked {
                     return LRESULT(1);
                 }
@@ -183,7 +187,7 @@ mod lock_hook {
                     *slot = h.0 as isize;
                 }
             } else if !enabled && *slot != 0 {
-                let _ = UnhookWindowsHookEx(HHOOK(*slot as *mut _));
+                let _ = UnhookWindowsHookEx(HHOOK(*slot));
                 *slot = 0;
             }
         }

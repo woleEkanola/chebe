@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 
 const links = [
   { href: "/", label: "Home", icon: "⌂" },
@@ -14,6 +15,20 @@ const links = [
 
 export function Sidebar() {
   const path = usePathname();
+  const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const logout = async () => {
+    setLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      /* ignore network errors — still clear local state */
+    }
+    setLoggingOut(false);
+    router.push("/login");
+  };
+
   return (
     <>
       <aside className="hidden md:flex w-60 shrink-0 flex-col gap-1 border-r border-[#E7E1D1] bg-white/70 p-4 backdrop-blur">
@@ -39,7 +54,17 @@ export function Sidebar() {
             </Link>
           );
         })}
-        <div className="mt-auto rounded-xl bg-[#F6F4EC] border border-[#E7E1D1] p-3 text-xs leading-relaxed text-[#64756B]">
+        <div className="mt-8">
+          <button
+            onClick={logout}
+            disabled={loggingOut}
+            className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold border border-[#E7E1D1] bg-[#F9E7E5] text-[#B3261E] disabled:opacity-60"
+          >
+            <span className="w-5 text-center">🚪</span>
+            <span>{loggingOut ? "Signing out…" : "Sign out"}</span>
+          </button>
+        </div>
+        <div className="mt-4 rounded-xl bg-[#F6F4EC] border border-[#E7E1D1] p-3 text-xs leading-relaxed text-[#64756B]">
           <b className="text-[#083B2A]">Mock mode</b>
           <br />
           UI runs on local mock data. Wire <code>lib/store.tsx</code> to Nest REST + WebSockets for production.
@@ -62,6 +87,13 @@ export function Sidebar() {
           );
         })}
       </nav>
+      <button
+        onClick={logout}
+        disabled={loggingOut}
+        className={`md:hidden fixed bottom-20 left-1/2 z-40 -translate-x-1/2 rounded-full border border-[#E7E1D1] bg-white/95 px-4 py-2 shadow-xl text-[11px] font-bold text-[#B3261E] disabled:opacity-60`}
+      >
+        {loggingOut ? "Signing out…" : "Sign out"}
+      </button>
     </>
   );
 }

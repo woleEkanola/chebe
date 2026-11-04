@@ -8,7 +8,7 @@ namespace ChebeService.Pairing;
 public sealed class PairingClient
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
-    private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "http://localhost:3000";
+    private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "https://chebe.vercel.app";
 
     public async Task<(bool ok, string deviceId, string childId, string message)> LinkAsync(string code, CancellationToken ct = default)
     {

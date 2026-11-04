@@ -23,7 +23,7 @@ public sealed class PipeServer
     private readonly object _gate = new();
     private readonly string _sessionToken = Guid.NewGuid().ToString("N");
 
-    private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "http://localhost:3000";
+    private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "https://chebe.vercel.app";
 
     public PipeServer(ILogger<PipeServer> log, RuleCache rules, PairingClient pairing)
     {

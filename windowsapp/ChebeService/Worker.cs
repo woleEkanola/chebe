@@ -19,7 +19,7 @@ public sealed class Worker : BackgroundService
     private readonly ILogger<Worker> _log;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
-    private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "http://localhost:3000";
+    private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "https://chebe.vercel.app";
     private DateTime _lastSync = DateTime.MinValue;
     private bool _warned5, _warned1;
 

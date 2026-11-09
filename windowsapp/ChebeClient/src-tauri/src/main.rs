@@ -31,38 +31,102 @@ fn session_token() -> String {
 }
 
 /// Search for ChebeService.exe in candidate locations.
-/// Returns the first path that exists, or None if not found.
+/// Includes a bounded recursive search so bundled layouts (e.g. preserved
+/// relative resource paths) are found regardless of nesting.
 #[cfg(target_os = "windows")]
 fn find_service_exe(extra_dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
-    let mut candidates: Vec<Option<std::path::PathBuf>> = Vec::new();
-    // Same directory as the Tauri exe
+    // 1. Same directory as the Tauri exe.
     if let Ok(mut p) = std::env::current_exe() {
         p.pop();
         p.push("ChebeService.exe");
-        candidates.push(Some(p));
+        if p.exists() {
+            return Some(p);
+        }
     }
-    // Tauri resource dir (bundled service binary on install)
-    for d in extra_dirs {
-        let mut p = d.clone();
-        p.push("ChebeService.exe");
-        candidates.push(Some(p));
+    // 2. Dev layout: ../ChebeService/bin/Release/net8.0-windows/win-x64/publish/
+    // 3. Installed layout (bundled resources preserve the source tree):
+    //    <exe-dir>/_up_/_up_/ChebeService/bin/Release/net8.0-windows/win-x64/publish/
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut dev = exe_dir.to_path_buf();
+            for seg in [
+                "..",
+                "ChebeService",
+                "bin",
+                "Release",
+                "net8.0-windows",
+                "win-x64",
+                "publish",
+                "ChebeService.exe",
+            ] {
+                dev.push(seg);
+            }
+            if dev.exists() {
+                return Some(dev);
+            }
+            let mut nested = exe_dir.to_path_buf();
+            for seg in [
+                "_up_",
+                "_up_",
+                "ChebeService",
+                "bin",
+                "Release",
+                "net8.0-windows",
+                "win-x64",
+                "publish",
+                "ChebeService.exe",
+            ] {
+                nested.push(seg);
+            }
+            if nested.exists() {
+                return Some(nested);
+            }
+        }
     }
-    // Dev layout: ../ChebeService/bin/Release/net8.0-windows/win-x64/publish/
-    if let Ok(mut p) = std::env::current_exe() {
-        p.pop(); // remove exe name
-        p.push("..");
-        p.push("ChebeService");
-        p.push("bin");
-        p.push("Release");
-        p.push("net8.0-windows");
-        p.push("win-x64");
-        p.push("publish");
-        p.push("ChebeService.exe");
-        candidates.push(Some(p));
+    // 3. Recursive search (max depth 8) under the Tauri resource dir(s)
+    //    and the exe directory — covers bundled installs that preserve
+    //    the source tree layout.
+    let mut roots: Vec<std::path::PathBuf> = extra_dirs.to_vec();
+    if let Ok(mut exe_dir) = std::env::current_exe() {
+        exe_dir.pop();
+        roots.push(exe_dir);
     }
-    // env override
-    candidates.push(std::env::var("CHEBE_SERVICE_EXE").ok().map(std::path::PathBuf::from));
-    candidates.into_iter().flatten().find(|p| p.exists())
+    for root in &roots {
+        if let Some(found) = find_file_recursive(root, "ChebeService.exe", 8) {
+            return Some(found);
+        }
+    }
+    // 4. Env override.
+    std::env::var("CHEBE_SERVICE_EXE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+}
+
+#[cfg(target_os = "windows")]
+fn find_file_recursive(dir: &std::path::Path, name: &str, depth: u8) -> Option<std::path::PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.file_name().and_then(|n| n.to_str()) == Some(name) {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(s) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = s.to_lowercase();
+                if lower == "windows" || lower == "$recycle.bin" || lower == "system volume information" {
+                    continue;
+                }
+            }
+            if let Some(found) = find_file_recursive(&path, name, depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 /// Ensure ChebeService.exe is running and reachable via the named pipe.
@@ -217,6 +281,36 @@ fn set_lock_hook(enabled: bool) {
     lock_hook::set(enabled);
 }
 
+/// Re-run the service ensure step (used by the UI "Try again" button).
+/// Emits chebe-service-ready / chebe-service-error like the startup path.
+#[tauri::command]
+async fn retry_service(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let resource_dirs = app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|d| vec![d])
+            .unwrap_or_default();
+        match ensure_service_running(resource_dirs).await {
+            Ok(()) => {
+                let _ = app.emit("chebe-service-ready", Value::Null);
+                Ok("connected".into())
+            }
+            Err(e) => {
+                let _ = app.emit("chebe-service-error", serde_json::json!({ "error": e }));
+                Err(e)
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Err("Service auto-start is Windows-only.".into())
+    }
+}
+
 /// Low-level keyboard hook: while the lock overlay is up, swallow Win keys
 /// and Alt+Tab / Alt+Esc so the child cannot escape to the desktop.
 #[cfg(target_os = "windows")]
@@ -302,7 +396,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
-        .invoke_handler(tauri::generate_handler![pair_device, send_sos, set_lock_hook])
+        .invoke_handler(tauri::generate_handler![pair_device, send_sos, set_lock_hook, retry_service])
         .setup(|app| {
             let sos = MenuItem::with_id(app, "sos", "Emergency SOS", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show Chebe", true, None::<&str>)?;

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import SetupWizard from "./components/SetupWizard";
 import TimePopover from "./components/TimePopover";
@@ -65,7 +66,21 @@ export default function App() {
       {inTauri && svc === "error" && (
         <div className="card" style={{ marginBottom: 12, background: "#F9E7E5", borderColor: "#D8B4B1" }}>
           <b>Service unavailable</b>
-          <div style={{ fontSize: 12, color: "#64756b" }}>{svcErr || "ChebeService.exe could not be started. Run the installer or place ChebeService.exe next to this app."}</div>
+          <div style={{ fontSize: 12, color: "#64756b" }}>{svcErr || "ChebeService.exe could not be started."}</div>
+          <button
+            className="btn-pine"
+            style={{ marginTop: 8, width: "100%" }}
+            onClick={async () => {
+              setSvc("starting");
+              try {
+                await invoke("retry_service");
+              } catch {
+                /* status arrives via chebe-service-error event */
+              }
+            }}
+          >
+            Try again
+          </button>
         </div>
       )}
 

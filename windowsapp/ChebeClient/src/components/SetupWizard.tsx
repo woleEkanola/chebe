@@ -35,7 +35,8 @@ export default function SetupWizard({ onDone }: { onDone: (deviceId: string) => 
       try { localStorage.setItem("chebe-device-id", data.device.id); } catch { /* ignore */ }
       onDone(data.device.id);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Link failed. Is ChebeService running?");
+      // Tauri invoke rejects with the raw Rust error string.
+      setErr(typeof e === "string" ? e : e instanceof Error ? e.message : "Link failed. Is ChebeService running?");
     } finally {
       setBusy(false);
     }

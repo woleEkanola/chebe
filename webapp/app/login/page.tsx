@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useChebe } from "@/lib/store";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { setUserId } = useChebe();
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -25,6 +27,7 @@ export default function LoginPage() {
         setErr(data.error ?? "Sign-in failed.");
         return;
       }
+      if (data.user?.id) setUserId(data.user.id);
       router.push("/");
     } catch {
       setErr("Cannot reach server. Is the backend migrated? See README.");

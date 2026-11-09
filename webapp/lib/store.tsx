@@ -79,6 +79,7 @@ interface ChatMsg {
 }
 
 interface ChebeState {
+  userId: string | null;
   userName: string;
   loading: boolean;
   children: ApiChild[];
@@ -100,6 +101,7 @@ interface ChebeState {
   dismissToast: () => void;
   sendChat: (text: string) => void;
   refresh: () => void;
+  setUserId: (id: string | null) => void;
 }
 
 const Ctx = createContext<ChebeState | null>(null);
@@ -133,6 +135,7 @@ export function deviceOnline(d: ApiDevice): boolean {
 }
 
 export function ChebeProvider({ children }: { children: React.ReactNode }) {
+  const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState("Parent");
   const [loading, setLoading] = useState(true);
   const [childList, setChildList] = useState<ApiChild[]>([]);
@@ -145,7 +148,6 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<ChatMsg[]>([
     { id: 1, who: "bot", html: "Hi. I can pause devices, block apps, locate your child, set bedtimes, and summarize the day. What should I do?" },
   ]);
-  const booted = useRef(false);
 
   const pushToast = useCallback((msg: string) => {
     setToasts((t) => [...t, msg]);
@@ -174,12 +176,13 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (booted.current) return;
-    booted.current = true;
     (async () => {
       try {
-        const me = await j<{ user: { name: string } }>("/api/auth/me");
-        setUserName(me.user.name);
+        const me = await j<{ user: { id: string; name: string } }>("/api/auth/me");
+        if (me.user.id !== userId) {
+          setUserId(me.user.id);
+          setUserName(me.user.name);
+        }
         await refresh();
       } catch {
         /* redirected to /login */
@@ -189,7 +192,19 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
     })();
     const t = setInterval(refresh, 30000); // poll-only parity with devices
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [userId, refresh]);
+
+  // Reset all family-scoped state when the authenticated user changes
+  // (e.g. parent registers a new account, logs out, or logs in as someone else)
+  useEffect(() => {
+    setChildList([]);
+    setAlerts([]);
+    setLimits([]);
+    setGeofences([]);
+    setUsage([]);
+    setBonusLog("No bonus granted yet today.");
+    setMessages([{ id: 1, who: "bot", html: "Hi. I can pause devices, block apps, locate your child, set bedtimes, and summarize the day. What should I do?" }]);
+  }, [userId]);
 
   const paused = useMemo(() => {
     const m: Record<string, boolean> = {};
@@ -302,13 +317,13 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({
-      userName, loading, children: childList, alerts, limits, geofences, usage,
+      userId, userName, loading, children: childList, alerts, limits, geofences, usage,
       paused, globalPause, bonusLog, toasts, messages,
       togglePause, toggleGlobalPause, grantBonus, resolveAlert, setAppLimit,
-      pushToast, dismissToast, sendChat, refresh,
+      pushToast, dismissToast, sendChat, refresh, setUserId,
     }),
-    [userName, loading, childList, alerts, limits, geofences, usage, paused, globalPause, bonusLog, toasts, messages,
-      togglePause, toggleGlobalPause, grantBonus, resolveAlert, setAppLimit, pushToast, dismissToast, sendChat, refresh]
+    [userId, userName, loading, childList, alerts, limits, geofences, usage, paused, globalPause, bonusLog, toasts, messages,
+      togglePause, toggleGlobalPause, grantBonus, resolveAlert, setAppLimit, pushToast, dismissToast, sendChat, refresh, setUserId]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

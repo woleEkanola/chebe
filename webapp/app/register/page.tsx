@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useChebe } from "@/lib/store";
 
 export default function RegisterPage() {
   const router = useRouter();
-  const [name, setName] = useState("Ama");
+  const { setUserId } = useChebe();
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -26,7 +28,8 @@ export default function RegisterPage() {
         setErr(data.error ?? "Registration failed.");
         return;
       }
-      router.push("/");
+      if (data.user?.id) setUserId(data.user.id);
+      router.push("/onboarding");
     } catch {
       setErr("Cannot reach server. Is the backend migrated? See README.");
     } finally {

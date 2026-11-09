@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde_json::Value;
+use std::path::PathBuf;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -20,6 +21,7 @@ use tauri::{
 
 const PIPE_NAME: &str = r"\\.\pipe\chebe-service";
 const SERVICE_VERSION: &str = "1.0.0";
+const SERVICE_EXE_NAME: &str = "ChebeService.exe";
 
 fn session_token() -> String {
     // Written per-boot by ChebeService to %PROGRAMDATA%\Chebe\session.token.
@@ -27,6 +29,81 @@ fn session_token() -> String {
     let path = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into())
         + "\\Chebe\\session.token";
     std::fs::read_to_string(path).unwrap_or_default().trim().to_string()
+}
+
+/// Search for ChebeService.exe in candidate locations.
+/// Returns the first path that exists, or None if not found.
+#[cfg(target_os = "windows")]
+fn find_service_exe() -> Option<std::path::PathBuf> {
+    let candidates: Vec<Option<std::path::PathBuf>> = vec![
+        // Same directory as the Tauri exe
+        std::env::current_exe()
+            .ok()
+            .and_then(|mut p| {
+                p.pop();
+                p.push("ChebeService.exe");
+                Some(p)
+            }),
+            // ../ChebeService/bin/Release/net8.0-windows/win-x64/publish/ relative to Tauri exe
+            std::env::current_exe()
+                .ok()
+                .and_then(|mut p| {
+                    p.pop(); // remove exe name
+                    p.push("..");
+                    p.push("ChebeService");
+                    p.push("bin");
+                    p.push("Release");
+                    p.push("net8.0-windows");
+                    p.push("win-x64");
+                    p.push("publish");
+                    p.push("ChebeService.exe");
+                    Some(p)
+                }),
+            // env override
+            std::env::var("CHEBE_SERVICE_EXE")
+                .ok()
+                .map(std::path::PathBuf::from),
+        ];
+    candidates.into_iter().flatten().find(|p| p.exists())
+}
+
+/// Ensure ChebeService.exe is running and reachable via the named pipe.
+/// If the pipe is already open, do nothing. Otherwise spawn the service
+/// binary and wait for the session token file to appear.
+#[cfg(target_os = "windows")]
+async fn ensure_service_running() -> Result<(), String> {
+    // Quick check: can we already open the pipe?
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ClientOptions;
+    use tokio::time::{timeout, Duration};
+
+    if ClientOptions::new().open(PIPE_NAME).is_ok() {
+        return Ok(());
+    }
+
+    // Find and spawn the service binary
+    let service_exe = find_service_exe().ok_or_else(|| {
+        "ChebeService.exe not found. Place it next to this app or set CHEBE_SERVICE_EXE."
+    })?;
+
+    tokio::process::Command::new(&service_exe)
+        .spawn()
+        .map_err(|e| format!("failed to launch ChebeService.exe: {e}"))?;
+
+    // Wait for session token to appear (service writes it on startup)
+    let token_path = std::env::var("PROGRAMDATA")
+        .unwrap_or_else(|_| "C:\\ProgramData".into())
+        + "\\Chebe\\session.token";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if std::path::Path::new(&token_path).exists() {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err("ChebeService started but did not become ready in time".into());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 /// Open a transient pipe connection, authenticate, send one request frame,
@@ -257,11 +334,26 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Background pipe listener → frontend events (Windows only).
+            // Ensure the background service is running before we try to talk to it.
             #[cfg(target_os = "windows")]
             {
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move { pipe_listener(handle).await });
+                tauri::async_runtime::spawn(async move {
+                    match ensure_service_running().await {
+                        Ok(()) => {
+                            let _ = handle.emit("chebe-service-ready", Value::Null);
+                        }
+                        Err(e) => {
+                            let _ = handle.emit("chebe-service-error", serde_json::json!({ "error": e }));
+                        }
+                    }
+                    // Start the background listener regardless; it will keep retrying.
+                    pipe_listener(handle).await;
+                });
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                // Non-Windows: no service, just start the listener stub if any.
             }
 
             Ok(())

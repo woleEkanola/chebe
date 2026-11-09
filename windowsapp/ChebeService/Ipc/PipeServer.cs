@@ -39,6 +39,7 @@ public sealed class PipeServer
             File.WriteAllText(tokenPath, _sessionToken);
         }
         catch { }
+        _log.LogInformation("Pipe server starting on \\\\.\\pipe\\{Pipe}", PipeName);
         _ = Task.Run(AcceptLoop);
     }
 
@@ -57,16 +58,23 @@ public sealed class PipeServer
 
     private async Task AcceptLoop()
     {
+        _log.LogInformation("Pipe accept loop running");
         while (true)
         {
-            var ps = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 4,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
             try
             {
+                var ps = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 4,
+                    PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                _log.LogInformation("Waiting for pipe connection...");
                 await ps.WaitForConnectionAsync();
+                _log.LogInformation("Pipe connection accepted");
                 _ = Task.Run(() => Handle(ps));
             }
-            catch { await Task.Delay(1000); }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "pipe accept failed, retrying");
+                await Task.Delay(1000);
+            }
         }
     }
 
@@ -77,6 +85,7 @@ public sealed class PipeServer
         using (var w = new StreamWriter(ps, Encoding.UTF8, leaveOpen: true) { AutoFlush = true })
         {
             var hello = await r.ReadLineAsync();
+            _log.LogInformation("Pipe hello received ({Len} chars)", hello?.Length ?? -1);
             if (hello is null || !hello.Contains(_sessionToken))
             {
                 _log.LogWarning("Pipe client rejected (bad session token)");

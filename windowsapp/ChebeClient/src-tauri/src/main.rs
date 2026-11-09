@@ -21,7 +21,6 @@ use tauri::{
 
 const PIPE_NAME: &str = r"\\.\pipe\chebe-service";
 const SERVICE_VERSION: &str = "1.0.0";
-const SERVICE_EXE_NAME: &str = "ChebeService.exe";
 
 fn session_token() -> String {
     // Written per-boot by ChebeService to %PROGRAMDATA%\Chebe\session.token.
@@ -34,36 +33,35 @@ fn session_token() -> String {
 /// Search for ChebeService.exe in candidate locations.
 /// Returns the first path that exists, or None if not found.
 #[cfg(target_os = "windows")]
-fn find_service_exe() -> Option<std::path::PathBuf> {
-    let candidates: Vec<Option<std::path::PathBuf>> = vec![
-        // Same directory as the Tauri exe
-        std::env::current_exe()
-            .ok()
-            .and_then(|mut p| {
-                p.pop();
-                p.push("ChebeService.exe");
-                Some(p)
-            }),
-            // ../ChebeService/bin/Release/net8.0-windows/win-x64/publish/ relative to Tauri exe
-            std::env::current_exe()
-                .ok()
-                .and_then(|mut p| {
-                    p.pop(); // remove exe name
-                    p.push("..");
-                    p.push("ChebeService");
-                    p.push("bin");
-                    p.push("Release");
-                    p.push("net8.0-windows");
-                    p.push("win-x64");
-                    p.push("publish");
-                    p.push("ChebeService.exe");
-                    Some(p)
-                }),
-            // env override
-            std::env::var("CHEBE_SERVICE_EXE")
-                .ok()
-                .map(std::path::PathBuf::from),
-        ];
+fn find_service_exe(extra_dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<Option<std::path::PathBuf>> = Vec::new();
+    // Same directory as the Tauri exe
+    if let Ok(mut p) = std::env::current_exe() {
+        p.pop();
+        p.push("ChebeService.exe");
+        candidates.push(Some(p));
+    }
+    // Tauri resource dir (bundled service binary on install)
+    for d in extra_dirs {
+        let mut p = d.clone();
+        p.push("ChebeService.exe");
+        candidates.push(Some(p));
+    }
+    // Dev layout: ../ChebeService/bin/Release/net8.0-windows/win-x64/publish/
+    if let Ok(mut p) = std::env::current_exe() {
+        p.pop(); // remove exe name
+        p.push("..");
+        p.push("ChebeService");
+        p.push("bin");
+        p.push("Release");
+        p.push("net8.0-windows");
+        p.push("win-x64");
+        p.push("publish");
+        p.push("ChebeService.exe");
+        candidates.push(Some(p));
+    }
+    // env override
+    candidates.push(std::env::var("CHEBE_SERVICE_EXE").ok().map(std::path::PathBuf::from));
     candidates.into_iter().flatten().find(|p| p.exists())
 }
 
@@ -71,7 +69,7 @@ fn find_service_exe() -> Option<std::path::PathBuf> {
 /// If the pipe is already open, do nothing. Otherwise spawn the service
 /// binary and wait for the session token file to appear.
 #[cfg(target_os = "windows")]
-async fn ensure_service_running() -> Result<(), String> {
+async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<(), String> {
     // Quick check: can we already open the pipe?
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ClientOptions;
@@ -82,7 +80,7 @@ async fn ensure_service_running() -> Result<(), String> {
     }
 
     // Find and spawn the service binary
-    let service_exe = find_service_exe().ok_or_else(|| {
+    let service_exe = find_service_exe(&extra_dirs).ok_or_else(|| {
         "ChebeService.exe not found. Place it next to this app or set CHEBE_SERVICE_EXE."
     })?;
 
@@ -338,8 +336,14 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 let handle = app.handle().clone();
+                let resource_dir = app
+                    .path()
+                    .resource_dir()
+                    .ok()
+                    .map(|d| vec![d])
+                    .unwrap_or_default();
                 tauri::async_runtime::spawn(async move {
-                    match ensure_service_running().await {
+                    match ensure_service_running(resource_dir).await {
                         Ok(()) => {
                             let _ = handle.emit("chebe-service-ready", Value::Null);
                         }

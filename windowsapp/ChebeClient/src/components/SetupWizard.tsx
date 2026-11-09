@@ -1,14 +1,17 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
-const BACKEND = "http://localhost:3000";
+const BACKEND = "https://chebe.vercel.app";
 
 /** PRD 4.1 — 6-digit pairing wizard.
- * Tauri: invokes `pair_device` → pipe → ChebeService links via backend.
- * Browser dev: POSTs straight to the backend (service does the same call). */
+ * Inside Tauri: invoke `pair_device` → pipe → ChebeService links via backend.
+ * Outside Tauri (browser dev): POST straight to the backend (same call the service makes). */
 export default function SetupWizard({ onDone }: { onDone: (deviceId: string) => void }) {
   const [code, setCode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
   const submit = async () => {
     const clean = code.replace(/\D/g, "");
@@ -16,10 +19,7 @@ export default function SetupWizard({ onDone }: { onDone: (deviceId: string) => 
     setErr("");
     setBusy(true);
     try {
-      // @ts-expect-error — injected by Tauri at runtime
-      if (window.__TAURI__?.core) {
-        // @ts-expect-error — injected by Tauri at runtime
-        const { invoke } = window.__TAURI__.core;
+      if (inTauri) {
         const deviceId = await invoke<string>("pair_device", { code: clean });
         try { localStorage.setItem("chebe-device-id", deviceId); } catch { /* ignore */ }
         onDone(deviceId);
@@ -35,7 +35,7 @@ export default function SetupWizard({ onDone }: { onDone: (deviceId: string) => 
       try { localStorage.setItem("chebe-device-id", data.device.id); } catch { /* ignore */ }
       onDone(data.device.id);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Link failed.");
+      setErr(e instanceof Error ? e.message : "Link failed. Is ChebeService running?");
     } finally {
       setBusy(false);
     }
@@ -44,7 +44,7 @@ export default function SetupWizard({ onDone }: { onDone: (deviceId: string) => 
   return (
     <div className="card" style={{ maxWidth: 420, margin: "40px auto" }}>
       <b>Link this device</b>
-      <p style={{ fontSize: 13, color: "#64756b" }}>Enter the 6-digit pairing code from the Parent Web Dashboard.</p>
+      <p style={{ fontSize: 13, color: "#64756B" }}>Enter the 6-digit pairing code from the Parent Web Dashboard.</p>
       <input
         value={code}
         onChange={(e) => setCode(e.target.value)}

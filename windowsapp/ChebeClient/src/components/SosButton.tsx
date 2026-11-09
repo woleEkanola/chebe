@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 /** PRD 4.5 — hold-to-confirm SOS (2s). Tauri: `send_sos` → pipe → service relays to backend. */
 export default function SosButton() {
@@ -6,15 +7,15 @@ export default function SosButton() {
   const [sent, setSent] = useState(false);
   const timer = useRef<number | null>(null);
 
+  const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
   const fire = async () => {
-    try {
-      // @ts-expect-error — injected by Tauri at runtime
-      if (window.__TAURI__?.core) {
-        // @ts-expect-error — injected by Tauri at runtime
-        await window.__TAURI__.core.invoke("send_sos", { childId: "" });
+    if (inTauri) {
+      try {
+        await invoke("send_sos", { childId: "" });
+      } catch {
+        /* offline: service queues the SOS ack path; UI still confirms the hold */
       }
-    } catch {
-      /* offline: service queues the SOS ack path; UI still confirms the hold */
     }
     setSent(true);
     setHolding(false);

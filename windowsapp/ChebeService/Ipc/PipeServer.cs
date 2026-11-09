@@ -116,6 +116,7 @@ public sealed class PipeServer
             case "pair":
             {
                 var code = doc.RootElement.TryGetProperty("code", out var c) ? c.GetString() ?? "" : "";
+                _log.LogInformation("Pair request received (code length {Len})", code.Replace("-", "").Length);
                 var (ok, deviceId, childId, message) = await _pairing.LinkAsync(code);
                 if (ok && _rules.Current is not null)
                 {
@@ -124,6 +125,7 @@ public sealed class PipeServer
                     _rules.Current.PolicyVersion = 1;
                     _rules.Save();
                 }
+                _log.LogInformation("Pair result: {Result} ({Message})", ok ? "paired" : "rejected", message);
                 await replyTo.WriteLineAsync(JsonSerializer.Serialize(new
                 {
                     type = ok ? "paired" : "pair-error",

@@ -169,12 +169,15 @@ async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<(
 }
 
 /// Open a transient pipe connection, authenticate, send one request frame,
-/// and return the first response frame.
+/// and read until a frame whose "type" is in `accept` arrives (broadcasts
+/// like lock/unlock/policy interleave on the same connection, so a single
+/// read can catch the wrong frame). Times out after 10s total; an EOF
+/// before a match means the service hung up (e.g. rejected hello).
 #[cfg(target_os = "windows")]
-async fn pipe_request(payload: Value) -> Result<Value, String> {
+async fn pipe_request_for(payload: Value, accept: &[&str]) -> Result<Value, String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ClientOptions;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{timeout, Duration, Instant};
 
     let mut client = ClientOptions::new()
         .open(PIPE_NAME)
@@ -193,12 +196,36 @@ async fn pipe_request(payload: Value) -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(client);
-    let mut line = String::new();
-    timeout(Duration::from_secs(10), reader.read_line(&mut line))
-        .await
-        .map_err(|_| "service timed out".to_string())?
-        .map_err(|e| e.to_string())?;
-    serde_json::from_str(&line).map_err(|e| format!("bad service reply: {e}"))
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("service timed out waiting for reply".into());
+        }
+        let mut line = String::new();
+        let n = timeout(remaining, reader.read_line(&mut line))
+            .await
+            .map_err(|_| "service timed out waiting for reply".to_string())?
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("service hung up before replying (pipe closed)".into());
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(trimmed) {
+            Ok(v) => {
+                let t = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if accept.contains(&t) {
+                    return Ok(v);
+                }
+                // Broadcast/interleaved frame (lock/unlock/policy) — ignore and keep waiting.
+                continue;
+            }
+            Err(e) => return Err(format!("bad service reply: {e}")),
+        }
+    }
 }
 
 #[tauri::command]
@@ -209,7 +236,11 @@ async fn pair_device(code: String) -> Result<String, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let reply = pipe_request(serde_json::json!({ "type": "pair", "code": clean })).await?;
+        let reply = pipe_request_for(
+            serde_json::json!({ "type": "pair", "code": clean }),
+            &["paired", "pair-error"],
+        )
+        .await?;
         match reply.get("type").and_then(|t| t.as_str()) {
             Some("paired") => Ok(reply
                 .get("deviceId")
@@ -234,41 +265,10 @@ async fn pair_device(code: String) -> Result<String, String> {
 async fn send_sos(_child_id: String) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        use tokio::net::windows::named_pipe::ClientOptions;
-        use tokio::time::{timeout, Duration};
-
-        let mut client = ClientOptions::new()
-            .open(PIPE_NAME)
-            .map_err(|e| format!("pipe unavailable: {e}"))?;
-        let hello = serde_json::json!({
-            "type": "hello",
-            "sessionToken": session_token(),
-            "version": SERVICE_VERSION,
-        });
-        client
-            .write_all(format!("{hello}\n{{\"type\":\"sos\"}}\n").as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
         // The service broadcasts sos-ack to all connected clients, including us.
-        let mut reader = BufReader::new(client);
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err("SOS not acknowledged.".into());
-            }
-            let mut line = String::new();
-            timeout(remaining, reader.read_line(&mut line))
-                .await
-                .map_err(|_| "SOS not acknowledged.".to_string())?
-                .map_err(|e| e.to_string())?;
-            if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                if v.get("type").and_then(|t| t.as_str()) == Some("sos-ack") {
-                    return Ok(v.get("ok").and_then(|o| o.as_bool()).unwrap_or(true));
-                }
-            }
-        }
+        // Read-until-match skips interleaved lock/unlock/policy frames.
+        let v = pipe_request_for(serde_json::json!({ "type": "sos" }), &["sos-ack"]).await?;
+        Ok(v.get("ok").and_then(|o| o.as_bool()).unwrap_or(true))
     }
     #[cfg(not(target_os = "windows"))]
     {

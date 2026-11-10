@@ -122,6 +122,7 @@ public sealed class PipeServer
     {
         using var doc = JsonDocument.Parse(line);
         var type = doc.RootElement.TryGetProperty("type", out var t) ? t.GetString() : null;
+        var reqId = doc.RootElement.TryGetProperty("reqId", out var r) ? r.GetString() : null;
         switch (type)
         {
             case "pair":
@@ -140,6 +141,7 @@ public sealed class PipeServer
                 await replyTo.WriteLineAsync(JsonSerializer.Serialize(new
                 {
                     type = ok ? "paired" : "pair-error",
+                    reqId,
                     deviceId, message,
                 }));
                 break;
@@ -160,6 +162,14 @@ public sealed class PipeServer
                     });
                 }
                 catch { /* offline: ack anyway, UI shows queued state */ }
+                // Direct reply carries reqId for correlation; broadcast keeps
+                // the background listener in sync.
+                await replyTo.WriteLineAsync(JsonSerializer.Serialize(new
+                {
+                    type = "sos-ack",
+                    reqId,
+                    ok = true,
+                }));
                 Broadcast(new { type = "sos-ack", ok = true });
                 break;
             }

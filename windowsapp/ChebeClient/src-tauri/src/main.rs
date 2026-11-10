@@ -129,18 +129,29 @@ fn find_file_recursive(dir: &std::path::Path, name: &str, depth: u8) -> Option<s
     None
 }
 
-/// Ensure ChebeService.exe is running and reachable via the named pipe.
-/// If the pipe is already open, do nothing. Otherwise spawn the service
-/// binary and wait for the session token file to appear.
+/// How the background service is running.
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(target_os = "windows")]
-async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<(), String> {
+enum ServiceMode {
+    /// Service was already running (installed Windows service = production).
+    Installed,
+    /// Service was spawned by the UI as a child process (testing/dev mode).
+    Spawned,
+}
+
+/// Ensure ChebeService.exe is running and reachable via the named pipe.
+/// Returns how the service is running so the UI can show testing vs live mode.
+/// If the pipe is already open, do nothing (installed service case).
+/// Otherwise spawn the service binary and wait for the session token file.
+#[cfg(target_os = "windows")]
+async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<ServiceMode, String> {
     // Quick check: can we already open the pipe?
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ClientOptions;
     use tokio::time::{timeout, Duration};
 
     if ClientOptions::new().open(PIPE_NAME).is_ok() {
-        return Ok(());
+        return Ok(ServiceMode::Installed);
     }
 
     // Find and spawn the service binary
@@ -159,7 +170,7 @@ async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if std::path::Path::new(&token_path).exists() {
-            return Ok(());
+            return Ok(ServiceMode::Spawned);
         }
         if tokio::time::Instant::now() > deadline {
             return Err("ChebeService started but did not become ready in time".into());
@@ -169,17 +180,18 @@ async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<(
 }
 
 /// Open a transient pipe connection, authenticate, send one request frame,
-/// and read until a frame whose "type" is in `accept` arrives (broadcasts
-/// like lock/unlock/policy interleave on the same connection, so a single
-/// read can catch the wrong frame). Times out after 10s total; an EOF
-/// before a match means the service hung up (e.g. rejected hello).
-/// On EOF the whole attempt (connect + hello + request) is retried up to
-/// 3 times, covering the race where we land on a dying/duplicate instance.
+/// and read until the matching reply arrives (matched by `reqId`).
+/// Broadcasts (lock/unlock/policy) carry no `reqId` and are skipped.
+/// Times out after 10s total; EOF before a match triggers a reconnect retry
+/// (up to 3 attempts) to cover dying/duplicate service instances.
 #[cfg(target_os = "windows")]
 async fn pipe_request_for(payload: Value, accept: &[&str]) -> Result<Value, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
+
     let mut last_err = String::new();
     for attempt in 1..=3u8 {
-        match pipe_attempt(&payload, accept).await {
+        match pipe_attempt(&payload, accept, &REQ_SEQ, Ordering::SeqCst).await {
             Ok(v) => return Ok(v),
             Err(e) if e == "EOF" && attempt < 3 => {
                 last_err = e;
@@ -198,10 +210,23 @@ async fn pipe_request_for(payload: Value, accept: &[&str]) -> Result<Value, Stri
 }
 
 #[cfg(target_os = "windows")]
-async fn pipe_attempt(payload: &Value, accept: &[&str]) -> Result<Value, String> {
+async fn pipe_attempt(
+    payload: &Value,
+    accept: &[&str],
+    seq: &std::sync::atomic::AtomicU64,
+    order: std::sync::atomic::Ordering,
+) -> Result<Value, String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ClientOptions;
     use tokio::time::{timeout, Duration, Instant};
+
+    // Attach a unique request id so the reply can be correlated even when
+    // interleaved broadcasts arrive on the same connection.
+    let req_id = format!("r{}", seq.fetch_add(1, order));
+    let mut req = payload.clone();
+    if let Some(obj) = req.as_object_mut() {
+        obj.insert("reqId".to_string(), Value::String(req_id.clone()));
+    }
 
     let mut client = ClientOptions::new()
         .open(PIPE_NAME)
@@ -216,7 +241,7 @@ async fn pipe_attempt(payload: &Value, accept: &[&str]) -> Result<Value, String>
         .await
         .map_err(|e| e.to_string())?;
     client
-        .write_all(format!("{payload}\n").as_bytes())
+        .write_all(format!("{req}\n").as_bytes())
         .await
         .map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(client);
@@ -241,10 +266,12 @@ async fn pipe_attempt(payload: &Value, accept: &[&str]) -> Result<Value, String>
         match serde_json::from_str::<Value>(trimmed) {
             Ok(v) => {
                 let t = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                if accept.contains(&t) {
+                let rid = v.get("reqId").and_then(|r| r.as_str()).unwrap_or("");
+                if accept.contains(&t) && (rid.is_empty() || rid == req_id) {
                     return Ok(v);
                 }
-                // Broadcast/interleaved frame (lock/unlock/policy) — ignore and keep waiting.
+                // Broadcast/interleaved frame (lock/unlock/policy) or a reply
+                // to a different request — ignore and keep waiting.
                 continue;
             }
             Err(e) => return Err(format!("bad service reply: {e}")),
@@ -337,9 +364,13 @@ async fn retry_service(app: tauri::AppHandle) -> Result<String, String> {
             .map(|d| vec![d])
             .unwrap_or_default();
         match ensure_service_running(resource_dirs).await {
-            Ok(()) => {
-                let _ = app.emit("chebe-service-ready", Value::Null);
-                Ok("connected".into())
+            Ok(mode) => {
+                let mode_str = match mode {
+                    ServiceMode::Installed => "live",
+                    ServiceMode::Spawned => "testing",
+                };
+                let _ = app.emit("chebe-service-ready", serde_json::json!({ "mode": mode_str }));
+                Ok(format!("connected ({mode_str})"))
             }
             Err(e) => {
                 let _ = app.emit("chebe-service-error", serde_json::json!({ "error": e }));
@@ -481,8 +512,12 @@ pub fn run() {
                     .unwrap_or_default();
                 tauri::async_runtime::spawn(async move {
                     match ensure_service_running(resource_dir).await {
-                        Ok(()) => {
-                            let _ = handle.emit("chebe-service-ready", Value::Null);
+                        Ok(mode) => {
+                            let mode_str = match mode {
+                                ServiceMode::Installed => "live",
+                                ServiceMode::Spawned => "testing",
+                            };
+                            let _ = handle.emit("chebe-service-ready", serde_json::json!({ "mode": mode_str }));
                         }
                         Err(e) => {
                             let _ = handle.emit("chebe-service-error", serde_json::json!({ "error": e }));

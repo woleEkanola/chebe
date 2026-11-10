@@ -22,6 +22,8 @@ export default function App() {
   const [state, setState] = useState<UiState>({ view: "status", locked: false, remainingMins: 17, mode: "Free Time" });
   const [svc, setSvc] = useState<"starting" | "ready" | "error">("starting");
   const [svcErr, setSvcErr] = useState("");
+  // "live" = installed Windows service (production), "testing" = UI-spawned sidecar (dev).
+  const [svcMode, setSvcMode] = useState<"live" | "testing" | null>(null);
 
   const lock = (reason = "bedtime") =>
     setState({ view: "status", locked: true, lockReason: reason, unlockAt: "07:00" });
@@ -42,7 +44,12 @@ export default function App() {
     listen<{ message?: string }>("chebe-warn", (e) =>
       setState((s) => (s.view === "status" ? { ...s, warn: e.payload?.message ?? "" } : s))
     ).then((u) => unsubs.push(u)).catch(() => {});
-    listen("chebe-service-ready", () => { if (!cancelled) setSvc("ready"); }).then((u) => unsubs.push(u)).catch(() => {});
+    listen("chebe-service-ready", (e: { payload?: { mode?: string } }) => {
+      if (cancelled) return;
+      setSvc("ready");
+      const m = e?.payload?.mode;
+      if (m === "live" || m === "testing") setSvcMode(m);
+    }).then((u) => unsubs.push(u)).catch(() => {});
     listen<{ error?: string }>("chebe-service-error", (e) => {
       if (cancelled) return;
       setSvc("error");
@@ -50,6 +57,8 @@ export default function App() {
     }).then((u) => unsubs.push(u)).catch(() => {});
     // Authoritative check on mount: the ready event may have fired before we
     // subscribed (Rust setup runs before the webview finishes loading).
+    // Mode stays null (shows neutral "Connected") if the startup event was
+    // the only source of mode info and was missed.
     invoke<string>("service_status").then(
       () => { if (!cancelled) { setSvc("ready"); setSvcErr(""); } },
       (e) => {
@@ -76,6 +85,18 @@ export default function App() {
         <div className="card" style={{ marginBottom: 12, background: "#F6F1E0" }}>
           <b>Starting protection…</b>
           <div style={{ fontSize: 12, color: "#64756b" }}>Connecting to ChebeService.</div>
+        </div>
+      )}
+      {inTauri && svc === "ready" && svcMode !== null && (
+        <div className="card" style={{ marginBottom: 12, background: svcMode === "live" ? "#E3EFE7" : "#F6F1E0" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: svcMode === "live" ? "#083B2A" : "#8A5A12" }}>
+            {svcMode === "live" ? "● Protected — installed service" : "● Testing mode — UI-launched service"}
+          </div>
+          {svcMode === "testing" && (
+            <div style={{ fontSize: 11, color: "#64756B", marginTop: 2 }}>
+              Full enforcement needs the installed service. Run the installer as Administrator for production use.
+            </div>
+          )}
         </div>
       )}
       {inTauri && svc === "error" && (

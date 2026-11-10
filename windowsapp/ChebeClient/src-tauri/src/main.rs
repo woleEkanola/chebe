@@ -134,12 +134,18 @@ async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<S
     use tokio::process::Command;
     use tokio::time::{sleep, Duration, Instant};
 
+    // Tauri setup and the React mount-time service_status call can race on a
+    // fresh launch. Serialize the check/spawn/health sequence so only one
+    // caller can spawn the sidecar.
+    static START_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let _start_guard = START_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+
     // If a pipe exists, verify the running service rather than assuming that
     // any process currently owning the pipe is healthy/current.
     if ClientOptions::new().open(PIPE_NAME).is_ok() {
-        if let Ok(mode) = query_service_mode().await {
-            return Ok(mode);
-        }
+        return query_service_mode().await.map_err(|e| {
+            format!("A ChebeService already owns the pipe but failed its health check: {e}. Restart or update that service; refusing to launch a duplicate.")
+        });
     }
 
     // Find and spawn the service binary for test/dev use. Production installs

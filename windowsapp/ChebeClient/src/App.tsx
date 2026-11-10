@@ -30,7 +30,11 @@ export default function App() {
 
   // Real pipe events from the Rust shell (lock/unlock/warn/policy). No-op in browser dev.
   useEffect(() => {
-    if (!inTauri) return;
+    if (!inTauri) {
+      // Browser dev without Tauri: nothing to connect to.
+      return;
+    }
+    let cancelled = false;
     const unsubs: Array<() => void> = [];
     listen<{ reason?: string; unlockAt?: string }>("chebe-lock", (e) =>
       lock(e.payload?.reason ?? "bedtime")).then((u) => unsubs.push(u)).catch(() => {});
@@ -38,12 +42,23 @@ export default function App() {
     listen<{ message?: string }>("chebe-warn", (e) =>
       setState((s) => (s.view === "status" ? { ...s, warn: e.payload?.message ?? "" } : s))
     ).then((u) => unsubs.push(u)).catch(() => {});
-    listen("chebe-service-ready", () => setSvc("ready")).then((u) => unsubs.push(u)).catch(() => {});
+    listen("chebe-service-ready", () => { if (!cancelled) setSvc("ready"); }).then((u) => unsubs.push(u)).catch(() => {});
     listen<{ error?: string }>("chebe-service-error", (e) => {
+      if (cancelled) return;
       setSvc("error");
       setSvcErr(e.payload?.error ?? "Could not start ChebeService.");
     }).then((u) => unsubs.push(u)).catch(() => {});
-    return () => unsubs.forEach((u) => u());
+    // Authoritative check on mount: the ready event may have fired before we
+    // subscribed (Rust setup runs before the webview finishes loading).
+    invoke<string>("service_status").then(
+      () => { if (!cancelled) { setSvc("ready"); setSvcErr(""); } },
+      (e) => {
+        if (cancelled) return;
+        setSvc("error");
+        setSvcErr(typeof e === "string" ? e : "Could not reach ChebeService.");
+      }
+    ).catch(() => {});
+    return () => { cancelled = true; unsubs.forEach((u) => u()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -89,14 +104,16 @@ export default function App() {
           <TimePopover remainingMins={state.remainingMins ?? 17} mode={state.mode ?? "Free Time"} />
           <div style={{ height: 12 }} />
           <SosButton />
-          <div className="card" style={{ marginTop: 12 }}>
-            <b>Demo controls</b>
-            <div style={{ fontSize: 12, color: "#64756b", margin: "4px 0 8px" }}>Simulates pipe messages from ChebeService.</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn-pine" onClick={() => lock("bedtime")}>Simulate lock</button>
-              <button className="btn-lime" onClick={() => setState({ view: "setup" })}>Setup wizard</button>
+          {!inTauri && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <b>Demo controls</b>
+              <div style={{ fontSize: 12, color: "#64756b", margin: "4px 0 8px" }}>Simulates pipe messages from ChebeService.</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn-pine" onClick={() => lock("bedtime")}>Simulate lock</button>
+                <button className="btn-lime" onClick={() => setState({ view: "setup" })}>Setup wizard</button>
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 

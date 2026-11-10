@@ -300,6 +300,25 @@ async fn send_sos(_child_id: String) -> Result<bool, String> {
     }
 }
 
+/// Synchronous readiness probe the UI can call on mount (avoids missing the
+/// one-shot chebe-service-ready event emitted during startup).
+/// Returns "ready" if the pipe opens, otherwise an error string.
+#[tauri::command]
+async fn service_status() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        match ClientOptions::new().open(PIPE_NAME) {
+            Ok(_) => Ok("ready".into()),
+            Err(e) => Err(format!("pipe unavailable (is ChebeService running?): {e}")),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Service auto-start is Windows-only.".into())
+    }
+}
+
 #[tauri::command]
 fn set_lock_hook(enabled: bool) {
     lock_hook::set(enabled);
@@ -420,7 +439,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
-        .invoke_handler(tauri::generate_handler![pair_device, send_sos, set_lock_hook, retry_service])
+        .invoke_handler(tauri::generate_handler![pair_device, send_sos, set_lock_hook, retry_service, service_status])
         .setup(|app| {
             let sos = MenuItem::with_id(app, "sos", "Emergency SOS", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show Chebe", true, None::<&str>)?;

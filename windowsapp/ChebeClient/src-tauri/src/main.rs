@@ -12,7 +12,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde_json::Value;
-use std::path::PathBuf;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -35,35 +34,21 @@ fn session_token() -> String {
 /// relative resource paths) are found regardless of nesting.
 #[cfg(target_os = "windows")]
 fn find_service_exe(extra_dirs: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
-    // 1. Same directory as the Tauri exe.
-    if let Ok(mut p) = std::env::current_exe() {
-        p.pop();
-        p.push("ChebeService.exe");
-        if p.exists() {
-            return Some(p);
-        }
+    // Prefer the explicit override, then bundled resources. A stale
+    // ChebeService.exe can remain beside the client from an older manual
+    // build; picking it first caused the UI and service protocol to mismatch.
+    if let Some(p) = std::env::var("CHEBE_SERVICE_EXE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())
+    {
+        return Some(p);
     }
-    // 2. Dev layout: ../ChebeService/bin/Release/net8.0-windows/win-x64/publish/
-    // 3. Installed layout (bundled resources preserve the source tree):
-    //    <exe-dir>/_up_/_up_/ChebeService/bin/Release/net8.0-windows/win-x64/publish/
+
+    // Installed layout (bundled resources preserve the source tree):
+    // <exe-dir>/_up_/_up_/ChebeService/bin/Release/.../ChebeService.exe
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            let mut dev = exe_dir.to_path_buf();
-            for seg in [
-                "..",
-                "ChebeService",
-                "bin",
-                "Release",
-                "net8.0-windows",
-                "win-x64",
-                "publish",
-                "ChebeService.exe",
-            ] {
-                dev.push(seg);
-            }
-            if dev.exists() {
-                return Some(dev);
-            }
             let mut nested = exe_dir.to_path_buf();
             for seg in [
                 "_up_",
@@ -81,26 +66,38 @@ fn find_service_exe(extra_dirs: &[std::path::PathBuf]) -> Option<std::path::Path
             if nested.exists() {
                 return Some(nested);
             }
+            // Development layout: ../ChebeService/bin/Release/...
+            let mut dev = exe_dir.to_path_buf();
+            for seg in [
+                "..",
+                "ChebeService",
+                "bin",
+                "Release",
+                "net8.0-windows",
+                "win-x64",
+                "publish",
+                "ChebeService.exe",
+            ] {
+                dev.push(seg);
+            }
+            if dev.exists() {
+                return Some(dev);
+            }
+            // Search Tauri's resource directory after the known fresh bundle
+            // paths, but before the potentially stale side-by-side copy.
+            for root in extra_dirs {
+                if let Some(found) = find_file_recursive(&root, "ChebeService.exe", 10) {
+                    return Some(found);
+                }
+            }
+            // Side-by-side service is a last resort only (may be stale).
+            let sibling = exe_dir.join("ChebeService.exe");
+            if sibling.exists() {
+                return Some(sibling);
+            }
         }
     }
-    // 3. Recursive search (max depth 8) under the Tauri resource dir(s)
-    //    and the exe directory — covers bundled installs that preserve
-    //    the source tree layout.
-    let mut roots: Vec<std::path::PathBuf> = extra_dirs.to_vec();
-    if let Ok(mut exe_dir) = std::env::current_exe() {
-        exe_dir.pop();
-        roots.push(exe_dir);
-    }
-    for root in &roots {
-        if let Some(found) = find_file_recursive(root, "ChebeService.exe", 8) {
-            return Some(found);
-        }
-    }
-    // 4. Env override.
-    std::env::var("CHEBE_SERVICE_EXE")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.exists())
+    None
 }
 
 #[cfg(target_os = "windows")]
@@ -129,54 +126,80 @@ fn find_file_recursive(dir: &std::path::Path, name: &str, depth: u8) -> Option<s
     None
 }
 
-/// How the background service is running.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Ensure ChebeService is running and return only after an authenticated health
+/// RPC succeeds. A stale session.token is not proof of readiness.
 #[cfg(target_os = "windows")]
-enum ServiceMode {
-    /// Service was already running (installed Windows service = production).
-    Installed,
-    /// Service was spawned by the UI as a child process (testing/dev mode).
-    Spawned,
-}
-
-/// Ensure ChebeService.exe is running and reachable via the named pipe.
-/// Returns how the service is running so the UI can show testing vs live mode.
-/// If the pipe is already open, do nothing (installed service case).
-/// Otherwise spawn the service binary and wait for the session token file.
-#[cfg(target_os = "windows")]
-async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<ServiceMode, String> {
-    // Quick check: can we already open the pipe?
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<String, String> {
     use tokio::net::windows::named_pipe::ClientOptions;
-    use tokio::time::{timeout, Duration};
+    use tokio::process::Command;
+    use tokio::time::{sleep, Duration, Instant};
 
+    // If a pipe exists, verify the running service rather than assuming that
+    // any process currently owning the pipe is healthy/current.
     if ClientOptions::new().open(PIPE_NAME).is_ok() {
-        return Ok(ServiceMode::Installed);
+        if let Ok(mode) = query_service_mode().await {
+            return Ok(mode);
+        }
     }
 
-    // Find and spawn the service binary
+    // Find and spawn the service binary for test/dev use. Production installs
+    // should have the LocalSystem service already running.
     let service_exe = find_service_exe(&extra_dirs).ok_or_else(|| {
         "ChebeService.exe not found. Place it next to this app or set CHEBE_SERVICE_EXE."
     })?;
 
-    tokio::process::Command::new(&service_exe)
+    let log_dir = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into()) + "\\Chebe";
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = std::path::PathBuf::from(&log_dir).join("service.log");
+    let stdout = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)
+        .map_err(|e| format!("cannot open service log {}: {e}", log_path.display()))?;
+    let stderr = stdout.try_clone().map_err(|e| format!("cannot prepare service log: {e}"))?;
+
+    let mut child = Command::new(&service_exe)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(stdout))
+        .stderr(std::process::Stdio::from(stderr))
         .spawn()
         .map_err(|e| format!("failed to launch ChebeService.exe: {e}"))?;
 
-    // Wait for session token to appear (service writes it on startup)
-    let token_path = std::env::var("PROGRAMDATA")
-        .unwrap_or_else(|_| "C:\\ProgramData".into())
-        + "\\Chebe\\session.token";
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    // Poll the authenticated health endpoint. This handles startup delay and
+    // distinguishes a successful process launch from a usable service.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut last_error = None;
     loop {
-        if std::path::Path::new(&token_path).exists() {
-            return Ok(ServiceMode::Spawned);
+        if let Some(status) = child.try_wait().map_err(|e| format!("could not inspect service process: {e}"))? {
+            return Err(format!("ChebeService exited early ({status}). See {}", log_path.display()));
         }
-        if tokio::time::Instant::now() > deadline {
-            return Err("ChebeService started but did not become ready in time".into());
+        match query_service_mode().await {
+            Ok(mode) => return Ok(mode),
+            Err(e) => last_error = Some(e),
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "ChebeService did not become ready: {}. See {}",
+                last_error.unwrap_or_else(|| "service is starting".into()),
+                log_path.display()
+            ));
+        }
+        sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Ensure service availability and complete an authenticated status RPC.
+/// The status response, not merely opening the pipe, is authoritative.
+#[cfg(target_os = "windows")]
+async fn connect_service(extra_dirs: Vec<std::path::PathBuf>) -> Result<String, String> {
+    ensure_service_running(extra_dirs).await
+}
+
+#[cfg(target_os = "windows")]
+async fn query_service_mode() -> Result<String, String> {
+    let reply = pipe_request_for(serde_json::json!({ "type": "status" }), &["status"]).await?;
+    if !reply.get("ready").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err("service responded but is not ready".into());
+    }
+    let mode = reply.get("mode").and_then(|v| v.as_str()).unwrap_or("testing");
+    Ok(mode.to_string())
 }
 
 /// Open a transient pipe connection, authenticate, send one request frame,
@@ -267,7 +290,7 @@ async fn pipe_attempt(
             Ok(v) => {
                 let t = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
                 let rid = v.get("reqId").and_then(|r| r.as_str()).unwrap_or("");
-                if accept.contains(&t) && (rid.is_empty() || rid == req_id) {
+                if accept.contains(&t) && rid == req_id {
                     return Ok(v);
                 }
                 // Broadcast/interleaved frame (lock/unlock/policy) or a reply
@@ -327,18 +350,13 @@ async fn send_sos(_child_id: String) -> Result<bool, String> {
     }
 }
 
-/// Synchronous readiness probe the UI can call on mount (avoids missing the
-/// one-shot chebe-service-ready event emitted during startup).
-/// Returns "ready" if the pipe opens, otherwise an error string.
+/// Authenticated health probe the UI calls on mount. Opening the pipe alone
+/// is not enough: the service must accept the session token and answer status.
 #[tauri::command]
 async fn service_status() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        use tokio::net::windows::named_pipe::ClientOptions;
-        match ClientOptions::new().open(PIPE_NAME) {
-            Ok(_) => Ok("ready".into()),
-            Err(e) => Err(format!("pipe unavailable (is ChebeService running?): {e}")),
-        }
+        connect_service(Vec::new()).await
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -363,14 +381,10 @@ async fn retry_service(app: tauri::AppHandle) -> Result<String, String> {
             .ok()
             .map(|d| vec![d])
             .unwrap_or_default();
-        match ensure_service_running(resource_dirs).await {
+        match connect_service(resource_dirs).await {
             Ok(mode) => {
-                let mode_str = match mode {
-                    ServiceMode::Installed => "live",
-                    ServiceMode::Spawned => "testing",
-                };
-                let _ = app.emit("chebe-service-ready", serde_json::json!({ "mode": mode_str }));
-                Ok(format!("connected ({mode_str})"))
+                let _ = app.emit("chebe-service-ready", serde_json::json!({ "mode": mode }));
+                Ok(format!("connected ({mode})"))
             }
             Err(e) => {
                 let _ = app.emit("chebe-service-error", serde_json::json!({ "error": e }));
@@ -511,13 +525,9 @@ pub fn run() {
                     .map(|d| vec![d])
                     .unwrap_or_default();
                 tauri::async_runtime::spawn(async move {
-                    match ensure_service_running(resource_dir).await {
+                    match connect_service(resource_dir).await {
                         Ok(mode) => {
-                            let mode_str = match mode {
-                                ServiceMode::Installed => "live",
-                                ServiceMode::Spawned => "testing",
-                            };
-                            let _ = handle.emit("chebe-service-ready", serde_json::json!({ "mode": mode_str }));
+                            let _ = handle.emit("chebe-service-ready", serde_json::json!({ "mode": mode }));
                         }
                         Err(e) => {
                             let _ = handle.emit("chebe-service-error", serde_json::json!({ "error": e }));

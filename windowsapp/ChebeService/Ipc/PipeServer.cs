@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using ChebeService.Enforcement;
 using ChebeService.Pairing;
+using Microsoft.Extensions.Hosting.WindowsServices;
 
 namespace ChebeService.Ipc;
 
@@ -53,6 +54,17 @@ public sealed class PipeServer
                 try { w.WriteLine(line); w.Flush(); }
                 catch { _clients.Remove(w); }
             }
+        }
+    }
+
+    private void WriteReply(StreamWriter writer, object message)
+    {
+        // Replies and broadcasts share each pipe writer. Serialize writes so
+        // JSON lines cannot interleave at the byte level.
+        lock (_gate)
+        {
+            writer.WriteLine(JsonSerializer.Serialize(message));
+            writer.Flush();
         }
     }
 
@@ -138,12 +150,19 @@ public sealed class PipeServer
                     _rules.Save();
                 }
                 _log.LogInformation("Pair result: {Result} ({Message})", ok ? "paired" : "rejected", message);
-                await replyTo.WriteLineAsync(JsonSerializer.Serialize(new
+                WriteReply(replyTo, new
                 {
                     type = ok ? "paired" : "pair-error",
                     reqId,
                     deviceId, message,
-                }));
+                });
+                break;
+            }
+            case "status":
+            {
+                var mode = WindowsServiceHelpers.IsWindowsService() ? "live" : "testing";
+                _log.LogInformation("Health probe replied (mode {Mode})", mode);
+                WriteReply(replyTo, new { type = "status", reqId, ready = true, mode, version = "1.0.0" });
                 break;
             }
             case "sos":
@@ -164,13 +183,12 @@ public sealed class PipeServer
                 catch { /* offline: ack anyway, UI shows queued state */ }
                 // Direct reply carries reqId for correlation; broadcast keeps
                 // the background listener in sync.
-                await replyTo.WriteLineAsync(JsonSerializer.Serialize(new
+                WriteReply(replyTo, new
                 {
                     type = "sos-ack",
                     reqId,
                     ok = true,
-                }));
-                Broadcast(new { type = "sos-ack", ok = true });
+                });
                 break;
             }
         }

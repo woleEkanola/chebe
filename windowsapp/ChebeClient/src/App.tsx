@@ -60,7 +60,13 @@ export default function App() {
     // Mode stays null (shows neutral "Connected") if the startup event was
     // the only source of mode info and was missed.
     invoke<string>("service_status").then(
-      () => { if (!cancelled) { setSvc("ready"); setSvcErr(""); } },
+      (mode) => {
+        if (!cancelled) {
+          setSvc("ready");
+          setSvcErr("");
+          if (mode === "live" || mode === "testing") setSvcMode(mode);
+        }
+      },
       (e) => {
         if (cancelled) return;
         setSvc("error");
@@ -109,7 +115,11 @@ export default function App() {
             onClick={async () => {
               setSvc("starting");
               try {
-                await invoke("retry_service");
+                const mode = await invoke<string>("retry_service");
+                setSvc("ready");
+                setSvcErr("");
+                if (mode.includes("live")) setSvcMode("live");
+                else if (mode.includes("testing")) setSvcMode("testing");
               } catch {
                 /* status arrives via chebe-service-error event */
               }

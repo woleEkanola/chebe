@@ -88,7 +88,18 @@ public sealed class PipeServer
             _log.LogInformation("Pipe hello received ({Len} chars)", hello?.Length ?? -1);
             if (hello is null || !hello.Contains(_sessionToken))
             {
-                _log.LogWarning("Pipe client rejected (bad session token)");
+                // Log only a prefix of each token: enough to spot a stale second
+                // instance serving with a different token, never enough to reuse.
+                static string Head(string? s) => string.IsNullOrEmpty(s) ? "(empty)" : s.Substring(0, Math.Min(4, s.Length)) + "…";
+                string? presented = null;
+                try
+                {
+                    using var hdoc = JsonDocument.Parse(hello ?? "{}");
+                    presented = hdoc.RootElement.TryGetProperty("sessionToken", out var st) ? st.GetString() : null;
+                }
+                catch { /* not JSON — still rejected below */ }
+                _log.LogWarning("Pipe client rejected (token mismatch: presented {Presented} vs expected {Expected})",
+                    Head(presented), Head(_sessionToken));
                 return;
             }
             lock (_gate) _clients.Add(w);

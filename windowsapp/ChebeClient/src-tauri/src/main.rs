@@ -173,8 +173,32 @@ async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<(
 /// like lock/unlock/policy interleave on the same connection, so a single
 /// read can catch the wrong frame). Times out after 10s total; an EOF
 /// before a match means the service hung up (e.g. rejected hello).
+/// On EOF the whole attempt (connect + hello + request) is retried up to
+/// 3 times, covering the race where we land on a dying/duplicate instance.
 #[cfg(target_os = "windows")]
 async fn pipe_request_for(payload: Value, accept: &[&str]) -> Result<Value, String> {
+    let mut last_err = String::new();
+    for attempt in 1..=3u8 {
+        match pipe_attempt(&payload, accept).await {
+            Ok(v) => return Ok(v),
+            Err(e) if e == "EOF" && attempt < 3 => {
+                last_err = e;
+                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                continue;
+            }
+            Err(e) if e == "EOF" => {
+                return Err(
+                    "service hung up before replying (pipe closed; is another ChebeService running?)".into(),
+                )
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err)
+}
+
+#[cfg(target_os = "windows")]
+async fn pipe_attempt(payload: &Value, accept: &[&str]) -> Result<Value, String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ClientOptions;
     use tokio::time::{timeout, Duration, Instant};
@@ -208,7 +232,7 @@ async fn pipe_request_for(payload: Value, accept: &[&str]) -> Result<Value, Stri
             .map_err(|_| "service timed out waiting for reply".to_string())?
             .map_err(|e| e.to_string())?;
         if n == 0 {
-            return Err("service hung up before replying (pipe closed)".into());
+            return Err("EOF".into());
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {

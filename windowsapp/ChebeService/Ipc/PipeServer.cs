@@ -75,7 +75,10 @@ public sealed class PipeServer
         {
             try
             {
-                var ps = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 4,
+                // 16 instances: one persistent listener plus concurrent
+                // transient RPCs (status/pair/sos) must never starve new
+                // connections, or clients see ERROR_PIPE_BUSY (os error 231).
+                var ps = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 16,
                     PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 _log.LogInformation("Waiting for pipe connection...");
                 await ps.WaitForConnectionAsync();

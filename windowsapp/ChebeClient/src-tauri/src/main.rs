@@ -140,12 +140,29 @@ async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<S
     static START_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     let _start_guard = START_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
 
-    // If a pipe exists, verify the running service rather than assuming that
-    // any process currently owning the pipe is healthy/current.
-    if ClientOptions::new().open(PIPE_NAME).is_ok() {
-        return query_service_mode().await.map_err(|e| {
-            format!("A ChebeService already owns the pipe but failed its health check: {e}. Restart or update that service; refusing to launch a duplicate.")
-        });
+    // If a pipe exists, verify the running service with a single
+    // authenticated health check rather than a bare open probe: a stale
+    // or half-open pipe passes an open() test but fails auth, and each
+    // redundant probe consumes a server instance. Never spawn a duplicate
+    // when a pipe already exists — report busy/unhealthy instead.
+    match query_service_mode().await {
+        Ok(mode) => return Ok(mode),
+        Err(e) => {
+            // Only spawn when no pipe exists at all. Distinguish "no server"
+            // (connect refused / file not found) from "server present but
+            // unhealthy or busy" to avoid duplicate instances.
+            use tokio::net::windows::named_pipe::ClientOptions;
+            let probe = ClientOptions::new().open(PIPE_NAME);
+            match probe {
+                Ok(_) => {
+                    return Err(format!("A ChebeService already owns the pipe but failed its health check: {e}. Restart or update that service; refusing to launch a duplicate."));
+                }
+                Err(_) => {
+                    // No pipe at all — fall through to spawn below.
+                    let _ = e;
+                }
+            }
+        }
     }
 
     // Find and spawn the service binary for test/dev use. Production installs

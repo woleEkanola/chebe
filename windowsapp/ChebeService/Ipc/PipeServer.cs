@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ChebeService.Enforcement;
 using ChebeService.Pairing;
 using Microsoft.Extensions.Hosting.WindowsServices;
@@ -23,6 +24,10 @@ public sealed class PipeServer
     private readonly List<StreamWriter> _clients = new();
     private readonly object _gate = new();
     private readonly string _sessionToken = Guid.NewGuid().ToString("N");
+    // Unique per process lifetime. Survivors restart with a new boot id so the
+    // UI can detect a service replacement and resubscribe instead of trusting
+    // a stale session.
+    private static readonly string BootId = Guid.NewGuid().ToString("N");
 
     private string Backend => Environment.GetEnvironmentVariable("CHEBE_BACKEND") ?? "https://chebe.vercel.app";
 
@@ -46,7 +51,21 @@ public sealed class PipeServer
 
     public void Broadcast(object msg)
     {
-        var line = JsonSerializer.Serialize(msg);
+        // Tag every broadcast with the boot nonce so a client holding a
+        // persistent connection can detect a service replacement from any
+        // frame, not just RPC replies.
+        string line;
+        try
+        {
+            var node = JsonSerializer.SerializeToNode(msg);
+            if (node is JsonObject obj && !obj.ContainsKey("bootId"))
+                obj["bootId"] = BootId;
+            line = node!.ToJsonString();
+        }
+        catch
+        {
+            line = JsonSerializer.Serialize(msg);
+        }
         lock (_gate)
         {
             foreach (var w in _clients.ToArray())
@@ -97,7 +116,10 @@ public sealed class PipeServer
     {
         using (ps)
         using (var r = new StreamReader(ps, Encoding.UTF8, leaveOpen: true))
-        using (var w = new StreamWriter(ps, Encoding.UTF8, leaveOpen: true) { AutoFlush = true })
+        // UTF-8 WITHOUT preamble: Encoding.UTF8 emits a BOM on first write,
+        // which breaks strict JSON parsers on the client (they see U+FEFF
+        // before '{'). The reader stays BOM-tolerant for old clients.
+        using (var w = new StreamWriter(ps, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true) { AutoFlush = true })
         {
             var hello = await r.ReadLineAsync();
             _log.LogInformation("Pipe hello received ({Len} chars)", hello?.Length ?? -1);
@@ -119,6 +141,11 @@ public sealed class PipeServer
             }
             lock (_gate) _clients.Add(w);
             _log.LogInformation("Pipe client connected");
+            // Immediate boot-nonce announcement: a (re)connecting client learns
+            // the current service generation before its first RPC, so a restart
+            // under a live UI is detected instead of trusted as a stale session.
+            try { WriteReply(w, new { type = "hello-ack", bootId = BootId, version = "1.0.0" }); }
+            catch { }
             try
             {
                 string? line;
@@ -157,6 +184,7 @@ public sealed class PipeServer
                 {
                     type = ok ? "paired" : "pair-error",
                     reqId,
+                    bootId = BootId,
                     deviceId, message,
                 });
                 break;
@@ -165,7 +193,7 @@ public sealed class PipeServer
             {
                 var mode = WindowsServiceHelpers.IsWindowsService() ? "live" : "testing";
                 _log.LogInformation("Health probe replied (mode {Mode})", mode);
-                WriteReply(replyTo, new { type = "status", reqId, ready = true, mode, version = "1.0.0" });
+                WriteReply(replyTo, new { type = "status", reqId, ready = true, mode, version = "1.0.0", bootId = BootId });
                 break;
             }
             case "sos":
@@ -190,6 +218,7 @@ public sealed class PipeServer
                 {
                     type = "sos-ack",
                     reqId,
+                    bootId = BootId,
                     ok = true,
                 });
                 break;

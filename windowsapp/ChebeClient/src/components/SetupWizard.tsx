@@ -6,7 +6,7 @@ const BACKEND = "https://chebe.vercel.app";
 /** PRD 4.1 — 6-digit pairing wizard.
  * Inside Tauri: invoke `pair_device` → pipe → ChebeService links via backend.
  * Outside Tauri (browser dev): POST straight to the backend (same call the service makes). */
-export default function SetupWizard({ onDone }: { onDone: (deviceId: string) => void }) {
+export default function SetupWizard({ onDone, onCancel }: { onDone: (deviceId: string) => void; onCancel?: () => void }) {
   const [code, setCode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,6 +56,11 @@ export default function SetupWizard({ onDone }: { onDone: (deviceId: string) => 
       <button className="btn-pine" style={{ width: "100%", marginTop: 12 }} onClick={submit} disabled={busy}>
         {busy ? "Linking…" : "Link device"}
       </button>
+      {onCancel && (
+        <button className="btn-lime" style={{ width: "100%", marginTop: 8 }} onClick={onCancel} disabled={busy}>
+          Back
+        </button>
+      )}
     </div>
   );
 }

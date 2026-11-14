@@ -126,157 +126,525 @@ fn find_file_recursive(dir: &std::path::Path, name: &str, depth: u8) -> Option<s
     None
 }
 
-/// Ensure ChebeService is running and return only after an authenticated health
-/// RPC succeeds. A stale session.token is not proof of readiness.
+/// Connection lifecycle: single multiplexed pipe + dev/prod spawn split.
+///
+/// Production builds NEVER spawn a service. The SCM-installed LocalSystem
+/// service owns the pipe; the client connects or fails with an actionable
+/// "run the installer" message. Auto-spawn is dev-only: debug builds or
+/// `CHEBE_DEV_AUTOSTART=1`.
+///
+/// Transport: one long-lived pipe handle. All RPCs multiplex over its writer
+/// (async-Mutex guarded) with `reqId` correlation; a background reader
+/// dispatches replies to pending callers and forwards broadcasts as Tauri
+/// events. Transient per-RPC connections are fallback-only.
 #[cfg(target_os = "windows")]
-async fn ensure_service_running(extra_dirs: Vec<std::path::PathBuf>) -> Result<String, String> {
+#[derive(Debug, Clone)]
+enum ConnError {
+    /// No pipe exists at all (open failed with file-not-found).
+    NoPipe,
+    /// Retryable: busy pipe, timeout, EOF, handshake race.
+    Transient(String),
+    /// Fails fast: missing binary, auth rejected, service not ready.
+    Permanent(String),
+}
+
+#[cfg(target_os = "windows")]
+impl ConnError {
+    fn message(&self) -> String {
+        match self {
+            ConnError::NoPipe => "ChebeService is not installed or not running. Please run the installer as Administrator, then press Try again.".to_string(),
+            ConnError::Transient(s) => s.clone(),
+            ConnError::Permanent(s) => s.clone(),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+type PipeReaderHalf = tokio::io::ReadHalf<tokio::net::windows::named_pipe::NamedPipeClient>;
+#[cfg(target_os = "windows")]
+type PipeWriterHalf = tokio::io::WriteHalf<tokio::net::windows::named_pipe::NamedPipeClient>;
+
+#[cfg(target_os = "windows")]
+struct ActiveConn {
+    writer: std::sync::Arc<tokio::sync::Mutex<PipeWriterHalf>>,
+    boot_id: String,
+    mode: String,
+}
+
+#[cfg(target_os = "windows")]
+static REQ_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+// Plain Mutex-in-OnceLock (not Arc<Mutex>): locks borrow 'static, matching the
+// original START_LOCK pattern, so `.lock().await` futures compile.
+#[cfg(target_os = "windows")]
+static SLOT: std::sync::OnceLock<tokio::sync::Mutex<Option<ActiveConn>>> =
+    std::sync::OnceLock::new();
+#[cfg(target_os = "windows")]
+static PENDING: std::sync::OnceLock<
+    tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<Value>>>,
+> = std::sync::OnceLock::new();
+#[cfg(target_os = "windows")]
+static KNOWN_BOOT: std::sync::OnceLock<tokio::sync::Mutex<String>> = std::sync::OnceLock::new();
+#[cfg(target_os = "windows")]
+static APP_SLOT: std::sync::OnceLock<tokio::sync::Mutex<Option<tauri::AppHandle>>> =
+    std::sync::OnceLock::new();
+#[cfg(target_os = "windows")]
+static CONNECT_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+#[cfg(target_os = "windows")]
+static EXTRA_DIRS: std::sync::OnceLock<tokio::sync::Mutex<Vec<std::path::PathBuf>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn shared_slot() -> &'static tokio::sync::Mutex<Option<ActiveConn>> {
+    SLOT.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+#[cfg(target_os = "windows")]
+fn pending_map(
+) -> &'static tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<Value>>>
+{
+    PENDING.get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()))
+}
+#[cfg(target_os = "windows")]
+fn known_boot() -> &'static tokio::sync::Mutex<String> {
+    KNOWN_BOOT.get_or_init(|| tokio::sync::Mutex::new(String::new()))
+}
+#[cfg(target_os = "windows")]
+fn app_slot() -> &'static tokio::sync::Mutex<Option<tauri::AppHandle>> {
+    APP_SLOT.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+#[cfg(target_os = "windows")]
+fn connect_lock() -> &'static tokio::sync::Mutex<()> {
+    CONNECT_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+#[cfg(target_os = "windows")]
+fn extra_dirs_slot() -> &'static tokio::sync::Mutex<Vec<std::path::PathBuf>> {
+    EXTRA_DIRS.get_or_init(|| tokio::sync::Mutex::new(Vec::new()))
+}
+
+/// Auto-spawn is strictly dev-only. Release builds connect to the installed
+/// service or report it missing; they never launch a sidecar copy.
+#[cfg(target_os = "windows")]
+fn dev_autostart_enabled() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+    std::env::var("CHEBE_DEV_AUTOSTART")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Strip a leading UTF-8 BOM (U+FEFF) if present. Servers built before the
+/// no-preamble fix emit one on the first frame of each connection; strict
+/// JSON parsing rejects it ("expected value at line 1 column 1").
+#[cfg(target_os = "windows")]
+fn clean_line(s: &str) -> &str {
+    s.trim().strip_prefix('\u{FEFF}').unwrap_or(s.trim())
+}
+
+/// Track the service boot nonce from any frame carrying `bootId`. A change
+/// means the service was replaced under a live UI: update state and tell the
+/// frontend to resubscribe rather than trusting the stale session.
+#[cfg(target_os = "windows")]
+async fn note_boot_id(frame: &Value) {
+    let Some(boot) = frame.get("bootId").and_then(|b| b.as_str()) else {
+        return;
+    };
+    if boot.is_empty() {
+        return;
+    }
+    let known = known_boot();
+    let mut guard = known.lock().await;
+    if *guard == boot {
+        return;
+    }
+    let first = guard.is_empty();
+    *guard = boot.to_string();
+    drop(guard);
+    if let Some(conn) = shared_slot().lock().await.as_mut() {
+        conn.boot_id = boot.to_string();
+    }
+    if !first {
+        if let Some(app) = app_slot().lock().await.clone() {
+            let _ = app.emit(
+                "chebe-service-restart",
+                serde_json::json!({ "bootId": boot }),
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn classify_open(e: std::io::Error) -> ConnError {
+    match e.raw_os_error() {
+        Some(2) => ConnError::NoPipe,
+        Some(231) => ConnError::Transient(
+            "ChebeService is busy (all pipe instances in use). Retrying…".to_string(),
+        ),
+        _ => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ConnError::NoPipe
+            } else {
+                ConnError::Transient(format!("pipe unavailable (is ChebeService running?): {e}"))
+            }
+        }
+    }
+}
+
+/// Bounded exponential backoff with jitter — transient failures only.
+#[cfg(target_os = "windows")]
+async fn backoff_sleep(attempt: u32) {
+    let base = 200u64.saturating_mul(1u64 << attempt.min(3)).min(2000);
+    let jitter = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.subsec_nanos() % 137) as u64)
+        .unwrap_or(0);
+    tokio::time::sleep(tokio::time::Duration::from_millis(base + jitter)).await;
+}
+
+/// Open one pipe, authenticate, and prove readiness with a `status` RPC.
+/// Returns (mode, boot_id, reader, writer). The caller stores the writer in
+/// the shared slot and hands the reader to the background dispatch loop.
+#[cfg(target_os = "windows")]
+async fn attach_once() -> Result<(String, String, PipeReaderHalf, PipeWriterHalf), ConnError> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ClientOptions;
-    use tokio::process::Command;
-    use tokio::time::{sleep, Duration, Instant};
+    use tokio::time::{timeout, Duration, Instant};
 
-    // Tauri setup and the React mount-time service_status call can race on a
-    // fresh launch. Serialize the check/spawn/health sequence so only one
-    // caller can spawn the sidecar.
-    static START_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    let _start_guard = START_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock().await;
+    let client = ClientOptions::new().open(PIPE_NAME).map_err(classify_open)?;
+    let (mut reader, mut writer) = tokio::io::split(client);
 
-    // If a pipe exists, verify the running service with a single
-    // authenticated health check rather than a bare open probe: a stale
-    // or half-open pipe passes an open() test but fails auth, and each
-    // redundant probe consumes a server instance. Never spawn a duplicate
-    // when a pipe already exists — report busy/unhealthy instead.
-    match query_service_mode().await {
-        Ok(mode) => return Ok(mode),
-        Err(e) => {
-            // Only spawn when no pipe exists at all. Distinguish "no server"
-            // (connect refused / file not found) from "server present but
-            // unhealthy or busy" to avoid duplicate instances.
-            use tokio::net::windows::named_pipe::ClientOptions;
-            let probe = ClientOptions::new().open(PIPE_NAME);
-            match probe {
-                Ok(_) => {
-                    return Err(format!("A ChebeService already owns the pipe but failed its health check: {e}. Restart or update that service; refusing to launch a duplicate."));
-                }
-                Err(_) => {
-                    // No pipe at all — fall through to spawn below.
-                    let _ = e;
+    let hello = serde_json::json!({
+        "type": "hello",
+        "sessionToken": session_token(),
+        "version": SERVICE_VERSION,
+    });
+    writer
+        .write_all(format!("{hello}\n").as_bytes())
+        .await
+        .map_err(|e| ConnError::Transient(format!("service handshake failed: {e}")))?;
+
+    let req_id = format!(
+        "r{}",
+        REQ_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    );
+    let status = serde_json::json!({ "type": "status", "reqId": req_id });
+    writer
+        .write_all(format!("{status}\n").as_bytes())
+        .await
+        .map_err(|e| ConnError::Transient(format!("service handshake failed: {e}")))?;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut buf = BufReader::new(&mut reader);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(ConnError::Transient("service timed out waiting for reply".into()));
+        }
+        let mut line = String::new();
+        let n = timeout(remaining, buf.read_line(&mut line))
+            .await
+            .map_err(|_| ConnError::Transient("service timed out waiting for reply".to_string()))?
+            .map_err(|e| ConnError::Transient(format!("service read failed: {e}")))?;
+        if n == 0 {
+            return Err(ConnError::Transient(
+                "service hung up before replying (pipe closed; is another ChebeService running?)".into(),
+            ));
+        }
+        let trimmed = clean_line(&line);
+        if trimmed.is_empty() {
+            continue;
+        }
+        let v: Value = serde_json::from_str(trimmed)
+            .map_err(|e| ConnError::Permanent(format!("bad service reply: {e}")))?;
+        // Learn the boot nonce from any frame (hello-ack may arrive first).
+        note_boot_id(&v).await;
+        let t = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let rid = v.get("reqId").and_then(|r| r.as_str()).unwrap_or("");
+        if t == "status" && rid == req_id {
+            if !v.get("ready").and_then(|x| x.as_bool()).unwrap_or(false) {
+                return Err(ConnError::Permanent("service responded but is not ready".into()));
+            }
+            let mode = v
+                .get("mode")
+                .and_then(|m| m.as_str())
+                .unwrap_or("testing")
+                .to_string();
+            let boot = v.get("bootId").and_then(|b| b.as_str()).unwrap_or("").to_string();
+            drop(buf);
+            return Ok((mode, boot, reader, writer));
+        }
+        // hello-ack or interleaved broadcast — keep waiting for status.
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn activate(mode: String, boot: String, reader: PipeReaderHalf, writer: PipeWriterHalf) {
+    if !boot.is_empty() {
+        *known_boot().lock().await = boot.clone();
+    }
+    let writer = std::sync::Arc::new(tokio::sync::Mutex::new(writer));
+    *shared_slot().lock().await = Some(ActiveConn {
+        writer,
+        boot_id: boot,
+        mode,
+    });
+    tokio::spawn(reader_loop(reader));
+}
+
+/// Ensure a live shared connection and return the service mode.
+/// The authenticated `status` response — not merely opening the pipe — is
+/// authoritative. Serialized so concurrent callers share one outcome.
+#[cfg(target_os = "windows")]
+async fn ensure_connected(extra_dirs: Vec<std::path::PathBuf>) -> Result<String, ConnError> {
+
+    // Fast path: a live shared connection needs no extra pipe open.
+    {
+        let guard = shared_slot().lock().await;
+        if let Some(conn) = guard.as_ref() {
+            return Ok(conn.mode.clone());
+        }
+    }
+    // Serialize check/spawn/health so setup and mount-time status race as one.
+    let lock = connect_lock();
+    let _guard = lock.lock().await;
+    {
+        let guard = shared_slot().lock().await;
+        if let Some(conn) = guard.as_ref() {
+            return Ok(conn.mode.clone());
+        }
+    }
+    if !extra_dirs.is_empty() {
+        *extra_dirs_slot().lock().await = extra_dirs.clone();
+    }
+    let dirs = extra_dirs_slot().lock().await.clone();
+
+    // Attach to an already-listening service: bounded jittered backoff on
+    // transient failures only. Permanent failures return immediately.
+    let mut last: ConnError = ConnError::NoPipe;
+    let mut saw_pipe = false;
+    for attempt in 0..3u32 {
+        match attach_once().await {
+            Ok((mode, boot, reader, writer)) => {
+                activate(mode.clone(), boot, reader, writer).await;
+                return Ok(mode);
+            }
+            Err(ConnError::NoPipe) => {
+                eprintln!("[chebe] ENSURE attempt failed: no pipe");
+                last = ConnError::NoPipe;
+                break;
+            }
+            Err(ConnError::Permanent(e)) => {
+                eprintln!("[chebe] ENSURE attempt failed permanent: {e}");
+                return Err(ConnError::Permanent(e));
+            }
+            Err(ConnError::Transient(e)) => {
+                eprintln!("[chebe] ENSURE attempt failed transient: {e}");
+                saw_pipe = true;
+                last = ConnError::Transient(e);
+                if attempt < 2 {
+                    backoff_sleep(attempt).await;
                 }
             }
         }
     }
+    // A pipe exists but is unhealthy/busy: never spawn a duplicate, even in
+    // dev — a second instance fights the singleton mutex and splits state.
+    if saw_pipe {
+        return Err(last);
+    }
+    if matches!(last, ConnError::NoPipe) {
+        // No pipe at all: production reports "not installed", dev spawns.
+        if !dev_autostart_enabled() {
+            return Err(ConnError::NoPipe);
+        }
+        return spawn_sidecar_and_attach(dirs).await;
+    }
+    Err(last)
+}
 
-    // Find and spawn the service binary for test/dev use. Production installs
-    // should have the LocalSystem service already running.
+/// Dev-only: launch the sidecar binary and poll until its health RPC passes.
+#[cfg(target_os = "windows")]
+async fn spawn_sidecar_and_attach(
+    extra_dirs: Vec<std::path::PathBuf>,
+) -> Result<String, ConnError> {
+    use tokio::process::Command;
+    use tokio::time::{Duration, Instant};
+
     let service_exe = find_service_exe(&extra_dirs).ok_or_else(|| {
-        "ChebeService.exe not found. Place it next to this app or set CHEBE_SERVICE_EXE."
+        ConnError::Permanent(
+            "ChebeService.exe not found. Place it next to this app or set CHEBE_SERVICE_EXE.".into(),
+        )
     })?;
 
-    let log_dir = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into()) + "\\Chebe";
+    let log_dir =
+        std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into()) + "\\Chebe";
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = std::path::PathBuf::from(&log_dir).join("service.log");
-    let stdout = std::fs::OpenOptions::new().create(true).append(true).open(&log_path)
-        .map_err(|e| format!("cannot open service log {}: {e}", log_path.display()))?;
-    let stderr = stdout.try_clone().map_err(|e| format!("cannot prepare service log: {e}"))?;
+    let stdout = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| {
+            ConnError::Permanent(format!("cannot open service log {}: {e}", log_path.display()))
+        })?;
+    let stderr = stdout
+        .try_clone()
+        .map_err(|e| ConnError::Permanent(format!("cannot prepare service log: {e}")))?;
 
     let mut child = Command::new(&service_exe)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout))
         .stderr(std::process::Stdio::from(stderr))
         .spawn()
-        .map_err(|e| format!("failed to launch ChebeService.exe: {e}"))?;
+        .map_err(|e| ConnError::Permanent(format!("failed to launch ChebeService.exe: {e}")))?;
 
-    // Poll the authenticated health endpoint. This handles startup delay and
-    // distinguishes a successful process launch from a usable service.
     let deadline = Instant::now() + Duration::from_secs(20);
-    let mut last_error = None;
+    let mut last_error: Option<String>;
     loop {
-        if let Some(status) = child.try_wait().map_err(|e| format!("could not inspect service process: {e}"))? {
-            return Err(format!("ChebeService exited early ({status}). See {}", log_path.display()));
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| ConnError::Permanent(format!("could not inspect service process: {e}")))?
+        {
+            return Err(ConnError::Permanent(format!(
+                "ChebeService exited early ({status}). See {}",
+                log_path.display()
+            )));
         }
-        match query_service_mode().await {
-            Ok(mode) => return Ok(mode),
-            Err(e) => last_error = Some(e),
+        match attach_once().await {
+            Ok((mode, boot, reader, writer)) => {
+                activate(mode.clone(), boot, reader, writer).await;
+                return Ok(mode);
+            }
+            Err(ConnError::Permanent(e)) => return Err(ConnError::Permanent(e)),
+            Err(ConnError::NoPipe) => last_error = Some("service is starting".into()),
+            Err(ConnError::Transient(e)) => last_error = Some(e),
         }
         if Instant::now() >= deadline {
-            return Err(format!(
+            return Err(ConnError::Transient(format!(
                 "ChebeService did not become ready: {}. See {}",
-                last_error.unwrap_or_else(|| "service is starting".into()),
+                last_error.as_deref().unwrap_or("service is starting"),
                 log_path.display()
-            ));
+            )));
         }
-        sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
-/// Ensure service availability and complete an authenticated status RPC.
-/// The status response, not merely opening the pipe, is authoritative.
+/// Compatibility alias: the status response is the readiness signal.
 #[cfg(target_os = "windows")]
-async fn connect_service(extra_dirs: Vec<std::path::PathBuf>) -> Result<String, String> {
-    ensure_service_running(extra_dirs).await
+async fn connect_service(extra_dirs: Vec<std::path::PathBuf>) -> Result<String, ConnError> {
+    ensure_connected(extra_dirs).await
 }
 
+/// Authoritative mount-time check: a fresh multiplexed `status` RPC over the
+/// shared pipe (no new connection). Opening the pipe alone proves nothing.
 #[cfg(target_os = "windows")]
-async fn query_service_mode() -> Result<String, String> {
-    let reply = pipe_request_for(serde_json::json!({ "type": "status" }), &["status"]).await?;
+async fn query_service_mode() -> Result<String, ConnError> {
+    let reply = rpc(serde_json::json!({ "type": "status" }), &["status"]).await?;
     if !reply.get("ready").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err("service responded but is not ready".into());
+        return Err(ConnError::Permanent("service responded but is not ready".into()));
     }
-    let mode = reply.get("mode").and_then(|v| v.as_str()).unwrap_or("testing");
-    Ok(mode.to_string())
+    Ok(reply
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("testing")
+        .to_string())
 }
 
-/// Open a transient pipe connection, authenticate, send one request frame,
-/// and read until the matching reply arrives (matched by `reqId`).
-/// Broadcasts (lock/unlock/policy) carry no `reqId` and are skipped.
-/// Times out after 10s total; EOF before a match triggers a reconnect retry
-/// (up to 3 attempts) to cover dying/duplicate service instances.
+/// Multiplexed RPC over the single shared pipe. Replies are dispatched by
+/// the background reader via `reqId`; broadcasts never consume a reply slot.
+/// On transient transport failure the caller falls back to one direct
+/// connection (covers the window where the reader hasn't noticed EOF yet).
 #[cfg(target_os = "windows")]
-async fn pipe_request_for(payload: Value, accept: &[&str]) -> Result<Value, String> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
+async fn rpc(payload: Value, accept: &[&str]) -> Result<Value, ConnError> {
+    let dirs = extra_dirs_slot().lock().await.clone();
+    ensure_connected(dirs).await?;
+    match rpc_via_shared(&payload, accept).await {
+        Ok(v) => {
+            note_boot_id(&v).await;
+            Ok(v)
+        }
+        Err(ConnError::Transient(e)) => {
+            eprintln!("[chebe] RPC shared failed ({e}), falling back to direct");
+            shared_slot().lock().await.take();
+            let v = direct_request(&payload, accept).await?;
+            note_boot_id(&v).await;
+            Ok(v)
+        }
+        Err(e) => Err(e),
+    }
+}
 
-    let mut last_err = String::new();
-    for attempt in 1..=3u8 {
-        match pipe_attempt(&payload, accept, &REQ_SEQ, Ordering::SeqCst).await {
-            Ok(v) => return Ok(v),
-            Err(e) if e == "EOF" && attempt < 3 => {
-                last_err = e;
-                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-                continue;
+#[cfg(target_os = "windows")]
+async fn rpc_via_shared(payload: &Value, accept: &[&str]) -> Result<Value, ConnError> {
+    use tokio::io::AsyncWriteExt;
+    use tokio::time::{timeout, Duration};
+
+    let writer = {
+        let guard = shared_slot().lock().await;
+        guard.as_ref().map(|c| c.writer.clone())
+    };
+    let Some(writer) = writer else {
+        return Err(ConnError::Transient("not connected to ChebeService".into()));
+    };
+
+    let req_id = format!(
+        "r{}",
+        REQ_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    );
+    let mut req = payload.clone();
+    if let Some(obj) = req.as_object_mut() {
+        obj.insert("reqId".to_string(), Value::String(req_id.clone()));
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    pending_map().lock().await.insert(req_id.clone(), tx);
+
+    let line = format!("{req}\n");
+    let write_res = { writer.lock().await.write_all(line.as_bytes()).await };
+    if let Err(e) = write_res {
+        pending_map().lock().await.remove(&req_id);
+        shared_slot().lock().await.take();
+        eprintln!("[chebe] RPC shared write failed: {e}");
+        return Err(ConnError::Transient(format!("service write failed: {e}")));
+    }
+
+    match timeout(Duration::from_secs(10), rx).await {
+        Ok(Ok(v)) => {
+            let t = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if accept.contains(&t) {
+                Ok(v)
+            } else {
+                // Right reqId, unexpected type: a server bug, not a retry case.
+                Ok(v)
             }
-            Err(e) if e == "EOF" => {
-                return Err(
-                    "service hung up before replying (pipe closed; is another ChebeService running?)".into(),
-                )
-            }
-            Err(e) => return Err(e),
+        }
+        Ok(Err(_)) => Err(ConnError::Transient("request cancelled".into())),
+        Err(_) => {
+            pending_map().lock().await.remove(&req_id);
+            shared_slot().lock().await.take();
+            eprintln!("[chebe] RPC shared timed out, clearing slot");
+            Err(ConnError::Transient("service timed out waiting for reply".into()))
         }
     }
-    Err(last_err)
 }
 
+/// Fallback only: one transient connection (hello + single request +
+/// read-until-match). Never used on the hot path while the shared pipe lives.
 #[cfg(target_os = "windows")]
-async fn pipe_attempt(
-    payload: &Value,
-    accept: &[&str],
-    seq: &std::sync::atomic::AtomicU64,
-    order: std::sync::atomic::Ordering,
-) -> Result<Value, String> {
+async fn direct_request(payload: &Value, accept: &[&str]) -> Result<Value, ConnError> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::windows::named_pipe::ClientOptions;
     use tokio::time::{timeout, Duration, Instant};
 
-    // Attach a unique request id so the reply can be correlated even when
-    // interleaved broadcasts arrive on the same connection.
-    let req_id = format!("r{}", seq.fetch_add(1, order));
+    let req_id = format!(
+        "r{}",
+        REQ_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    );
     let mut req = payload.clone();
     if let Some(obj) = req.as_object_mut() {
         obj.insert("reqId".to_string(), Value::String(req_id.clone()));
     }
 
-    let mut client = ClientOptions::new()
-        .open(PIPE_NAME)
-        .map_err(|e| format!("pipe unavailable (is ChebeService running?): {e}"))?;
+    let mut client = ClientOptions::new().open(PIPE_NAME).map_err(classify_open)?;
     let hello = serde_json::json!({
         "type": "hello",
         "sessionToken": session_token(),
@@ -285,27 +653,29 @@ async fn pipe_attempt(
     client
         .write_all(format!("{hello}\n").as_bytes())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ConnError::Transient(format!("service handshake failed: {e}")))?;
     client
         .write_all(format!("{req}\n").as_bytes())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ConnError::Transient(format!("service write failed: {e}")))?;
     let mut reader = BufReader::new(client);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err("service timed out waiting for reply".into());
+            return Err(ConnError::Transient("service timed out waiting for reply".into()));
         }
         let mut line = String::new();
         let n = timeout(remaining, reader.read_line(&mut line))
             .await
-            .map_err(|_| "service timed out waiting for reply".to_string())?
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| ConnError::Transient("service timed out waiting for reply".to_string()))?
+            .map_err(|e| ConnError::Transient(format!("service read failed: {e}")))?;
         if n == 0 {
-            return Err("EOF".into());
+            return Err(ConnError::Transient(
+                "service hung up before replying (pipe closed; is another ChebeService running?)".into(),
+            ));
         }
-        let trimmed = line.trim();
+        let trimmed = clean_line(&line);
         if trimmed.is_empty() {
             continue;
         }
@@ -316,11 +686,9 @@ async fn pipe_attempt(
                 if accept.contains(&t) && rid == req_id {
                     return Ok(v);
                 }
-                // Broadcast/interleaved frame (lock/unlock/policy) or a reply
-                // to a different request — ignore and keep waiting.
                 continue;
             }
-            Err(e) => return Err(format!("bad service reply: {e}")),
+            Err(e) => return Err(ConnError::Permanent(format!("bad service reply: {e}"))),
         }
     }
 }
@@ -333,11 +701,12 @@ async fn pair_device(code: String) -> Result<String, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let reply = pipe_request_for(
+        let reply = rpc(
             serde_json::json!({ "type": "pair", "code": clean }),
             &["paired", "pair-error"],
         )
-        .await?;
+        .await
+        .map_err(|e| e.message())?;
         match reply.get("type").and_then(|t| t.as_str()) {
             Some("paired") => Ok(reply
                 .get("deviceId")
@@ -362,9 +731,11 @@ async fn pair_device(code: String) -> Result<String, String> {
 async fn send_sos(_child_id: String) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
-        // The service broadcasts sos-ack to all connected clients, including us.
-        // Read-until-match skips interleaved lock/unlock/policy frames.
-        let v = pipe_request_for(serde_json::json!({ "type": "sos" }), &["sos-ack"]).await?;
+        // Direct reply carries reqId for correlation; broadcasts are dispatched
+        // by the shared reader and never consume this reply slot.
+        let v = rpc(serde_json::json!({ "type": "sos" }), &["sos-ack"])
+            .await
+            .map_err(|e| e.message())?;
         Ok(v.get("ok").and_then(|o| o.as_bool()).unwrap_or(true))
     }
     #[cfg(not(target_os = "windows"))]
@@ -379,7 +750,7 @@ async fn send_sos(_child_id: String) -> Result<bool, String> {
 async fn service_status() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        connect_service(Vec::new()).await
+        query_service_mode().await.map_err(|e| e.message())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -410,8 +781,9 @@ async fn retry_service(app: tauri::AppHandle) -> Result<String, String> {
                 Ok(format!("connected ({mode})"))
             }
             Err(e) => {
-                let _ = app.emit("chebe-service-error", serde_json::json!({ "error": e }));
-                Err(e)
+                let msg = e.message();
+                let _ = app.emit("chebe-service-error", serde_json::json!({ "error": msg }));
+                Err(msg)
             }
         }
     }
@@ -537,7 +909,9 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Ensure the background service is running before we try to talk to it.
+            // Connect to the service (dev-only auto-spawn lives inside
+            // ensure_connected). The shared reader forwards lock/unlock/warn
+            // broadcasts; the supervisor below keeps the connection alive.
             #[cfg(target_os = "windows")]
             {
                 let handle = app.handle().clone();
@@ -548,16 +922,17 @@ pub fn run() {
                     .map(|d| vec![d])
                     .unwrap_or_default();
                 tauri::async_runtime::spawn(async move {
+                    *app_slot().lock().await = Some(handle.clone());
+                    *extra_dirs_slot().lock().await = resource_dir.clone();
                     match connect_service(resource_dir).await {
                         Ok(mode) => {
                             let _ = handle.emit("chebe-service-ready", serde_json::json!({ "mode": mode }));
                         }
                         Err(e) => {
-                            let _ = handle.emit("chebe-service-error", serde_json::json!({ "error": e }));
+                            let _ = handle.emit("chebe-service-error", serde_json::json!({ "error": e.message() }));
                         }
                     }
-                    // Start the background listener regardless; it will keep retrying.
-                    pipe_listener(handle).await;
+                    pipe_supervisor().await;
                 });
             }
             #[cfg(not(target_os = "windows"))]
@@ -571,65 +946,100 @@ pub fn run() {
         .expect("ChebeClient failed to start");
 }
 
+/// Background reader for the single shared pipe: dispatches `reqId` replies
+/// to pending RPC callers and forwards broadcasts to the UI. On EOF the
+/// shared slot is cleared so the next RPC transparently reconnects; the
+/// supervisor below re-establishes proactively.
 #[cfg(target_os = "windows")]
-async fn pipe_listener(app: tauri::AppHandle) {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::windows::named_pipe::ClientOptions;
-    use tokio::time::{timeout, Duration};
+async fn reader_loop(mut reader: PipeReaderHalf) {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut buf = BufReader::new(&mut reader);
     loop {
-        let res: Result<(), String> = async {
-            let mut client = ClientOptions::new()
-                .open(PIPE_NAME)
-                .map_err(|e| e.to_string())?;
-            let hello = serde_json::json!({
-                "type": "hello",
-                "sessionToken": session_token(),
-                "version": SERVICE_VERSION,
-            });
-            client
-                .write_all(format!("{hello}\n").as_bytes())
-                .await
-                .map_err(|e| e.to_string())?;
-            let mut reader = BufReader::new(client);
-            loop {
-                let mut line = String::new();
-                let n = timeout(Duration::from_secs(45), reader.read_line(&mut line))
-                    .await
-                    .map_err(|_| "idle".to_string())?
-                    .map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
+        let mut line = String::new();
+        match buf.read_line(&mut line).await {
+            Ok(0) => {
+                eprintln!("[chebe] READER eof, clearing slot");
+                break;
+            } // service went away; supervisor reconnects
+            Ok(_) => {
+                let trimmed = clean_line(&line);
+                if trimmed.is_empty() {
+                    continue;
                 }
-                if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                    match v.get("type").and_then(|t| t.as_str()) {
-                        Some("lock") => show_lock(
-                            &app,
-                            v.get("reason").and_then(|r| r.as_str()).unwrap_or("bedtime"),
-                            v.get("unlockAt").and_then(|r| r.as_str()).unwrap_or(""),
-                        ),
-                        Some("unlock") => hide_lock(&app),
-                        Some("warn") => {
-                            if let Some(main) = app.get_webview_window("main") {
-                                let _ = main.emit("chebe-warn", v);
-                            }
-                        }
-                        Some("sos-ack") => {
-                            if let Some(main) = app.get_webview_window("main") {
-                                let _ = main.emit("chebe-sos-ack", v);
-                            }
-                        }
-                        _ => {}
+                let Ok(v) = serde_json::from_str::<Value>(trimmed) else {
+                    eprintln!("[chebe] READER unparsable frame, skipping");
+                    continue;
+                };
+                note_boot_id(&v).await;
+                let rid = v
+                    .get("reqId")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !rid.is_empty() {
+                    if let Some(tx) = pending_map().lock().await.remove(&rid) {
+                        let _ = tx.send(v);
+                        continue;
                     }
                 }
+                forward_broadcast(&v).await;
             }
-            Ok(())
+            Err(e) => {
+                eprintln!("[chebe] READER err {e}, clearing slot");
+                break;
+            }
         }
-        .await;
-        if let Err(e) = res {
-            let _ = e;
-        }
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
+    shared_slot().lock().await.take();
+}
+
+#[cfg(target_os = "windows")]
+async fn forward_broadcast(v: &Value) {
+    let Some(app) = app_slot().lock().await.clone() else {
+        return;
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("lock") => show_lock(
+            &app,
+            v.get("reason").and_then(|r| r.as_str()).unwrap_or("bedtime"),
+            v.get("unlockAt").and_then(|r| r.as_str()).unwrap_or(""),
+        ),
+        Some("unlock") => hide_lock(&app),
+        Some("warn") => {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.emit("chebe-warn", v);
+            }
+        }
+        Some("sos-ack") => {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.emit("chebe-sos-ack", v);
+            }
+        }
+        Some("policy") => {
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.emit("chebe-policy", v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Keep the shared connection alive; the reader forwards all broadcasts.
+/// Never opens a pipe per tick while one is live (fast path, no new handle).
+#[cfg(target_os = "windows")]
+async fn pipe_supervisor() {
+    loop {
+        let dirs = extra_dirs_slot().lock().await.clone();
+        let _ = ensure_connected(dirs).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(dead_code)]
+async fn pipe_listener(app: tauri::AppHandle) {
+    *app_slot().lock().await = Some(app);
+    pipe_supervisor().await;
 }
 
 fn main() {

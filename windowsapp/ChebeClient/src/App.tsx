@@ -50,6 +50,25 @@ export default function App() {
       const m = e?.payload?.mode;
       if (m === "live" || m === "testing") setSvcMode(m);
     }).then((u) => unsubs.push(u)).catch(() => {});
+    listen<{ bootId?: string }>("chebe-service-restart", () => {
+      if (cancelled) return;
+      // Service was replaced under a live UI: re-run the authoritative
+      // status check to rebuild subscriptions against the new generation.
+      invoke<string>("service_status").then(
+        (mode) => {
+          if (!cancelled) {
+            setSvc("ready");
+            setSvcErr("");
+            if (mode === "live" || mode === "testing") setSvcMode(mode);
+          }
+        },
+        (e) => {
+          if (cancelled) return;
+          setSvc("error");
+          setSvcErr(typeof e === "string" ? e : "Could not reach ChebeService.");
+        }
+      ).catch(() => {});
+    }).then((u) => unsubs.push(u)).catch(() => {});
     listen<{ error?: string }>("chebe-service-error", (e) => {
       if (cancelled) return;
       setSvc("error");
@@ -77,7 +96,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (state.view === "setup") return <SetupWizard onDone={unlock} />;
+  if (state.view === "setup") return <SetupWizard onDone={unlock} onCancel={unlock} />;
 
   return (
     <div style={{ padding: 16, maxWidth: 420, margin: "0 auto" }}>
@@ -135,6 +154,14 @@ export default function App() {
           <TimePopover remainingMins={state.remainingMins ?? 17} mode={state.mode ?? "Free Time"} />
           <div style={{ height: 12 }} />
           <SosButton />
+          <div style={{ height: 12 }} />
+          <button
+            className="btn-lime"
+            style={{ width: "100%" }}
+            onClick={() => setState({ view: "setup" })}
+          >
+            Pair device
+          </button>
           {!inTauri && (
             <div className="card" style={{ marginTop: 12 }}>
               <b>Demo controls</b>

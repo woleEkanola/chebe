@@ -10,6 +10,7 @@ export default function SetupWizard({ onDone, onCancel }: { onDone: (deviceId: s
   const [code, setCode] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [linkedId, setLinkedId] = useState<string | null>(null);
 
   const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -22,7 +23,7 @@ export default function SetupWizard({ onDone, onCancel }: { onDone: (deviceId: s
       if (inTauri) {
         const deviceId = await invoke<string>("pair_device", { code: clean });
         try { localStorage.setItem("chebe-device-id", deviceId); } catch { /* ignore */ }
-        onDone(deviceId);
+        setLinkedId(deviceId);
         return;
       }
       const res = await fetch(`${BACKEND}/api/pairing/link`, {
@@ -33,7 +34,7 @@ export default function SetupWizard({ onDone, onCancel }: { onDone: (deviceId: s
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Link failed.");
       try { localStorage.setItem("chebe-device-id", data.device.id); } catch { /* ignore */ }
-      onDone(data.device.id);
+      setLinkedId(data.device.id);
     } catch (e) {
       // Tauri invoke rejects with the raw Rust error string.
       setErr(typeof e === "string" ? e : e instanceof Error ? e.message : "Link failed. Is ChebeService running?");
@@ -46,6 +47,17 @@ export default function SetupWizard({ onDone, onCancel }: { onDone: (deviceId: s
     <div className="card" style={{ maxWidth: 420, margin: "40px auto" }}>
       <b>Link this device</b>
       <p style={{ fontSize: 13, color: "#64756B" }}>Enter the 6-digit pairing code from the Parent Web Dashboard.</p>
+      {linkedId && (
+        <div style={{ background: "#E3EFE7", borderRadius: 12, padding: 12, marginTop: 4 }}>
+          <div style={{ fontWeight: 800, color: "#083B2A" }}>✓ Device linked</div>
+          <div style={{ fontSize: 12, color: "#42524a", marginTop: 4, wordBreak: "break-all" }}>
+            This PC is now bound to your family. Device ID: {linkedId}
+          </div>
+          <button className="btn-pine" style={{ width: "100%", marginTop: 10 }} onClick={() => onDone(linkedId)}>
+            Done
+          </button>
+        </div>
+      )}
       <input
         value={code}
         onChange={(e) => setCode(e.target.value)}

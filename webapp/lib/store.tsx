@@ -134,6 +134,11 @@ export function deviceOnline(d: ApiDevice): boolean {
   return Date.now() - new Date(d.lastSeenAt).getTime() < 5 * 60 * 1000;
 }
 
+function childName(children: ApiChild[], childId: string | null): string {
+  if (!childId) return "your child";
+  return children.find((c) => c.id === childId)?.name ?? "your child";
+}
+
 export function ChebeProvider({ children }: { children: React.ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState("Parent");
@@ -148,6 +153,9 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<ChatMsg[]>([
     { id: 1, who: "bot", html: "Hi. I can pause devices, block apps, locate your child, set bedtimes, and summarize the day. What should I do?" },
   ]);
+  // Alert ids already seen — arrival toasts fire only for genuinely new
+  // alerts, never for the backlog present on first load.
+  const seenAlerts = useRef<Set<string> | null>(null);
 
   const pushToast = useCallback((msg: string) => {
     setToasts((t) => [...t, msg]);
@@ -166,6 +174,25 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
         j<{ usage: ApiUsageChild[] }>("/api/usage"),
       ]);
       setChildList(c.children);
+      // Arrival signal: toast genuinely new open alerts (SOS gets its own
+      // wording). The first load only seeds the seen set — no toast storm.
+      const openNow = a.alerts.filter((x) => x.status === "open");
+      if (seenAlerts.current === null) {
+        seenAlerts.current = new Set(openNow.map((x) => x.id));
+      } else {
+        for (const x of openNow) {
+          if (!seenAlerts.current.has(x.id)) {
+            seenAlerts.current.add(x.id);
+            if (x.kind === "sos") pushToast(`SOS from ${childName(c.children, x.childId)} — tap Recent alerts to review.`);
+            else pushToast(`New alert: ${x.title}`);
+          }
+        }
+        // Drop resolved ids so a re-opened alert can notify again.
+        const stillOpen = new Set(openNow.map((x) => x.id));
+        for (const id of [...seenAlerts.current]) {
+          if (!stillOpen.has(id)) seenAlerts.current.delete(id);
+        }
+      }
       setAlerts(a.alerts);
       setLimits(l.limits);
       setGeofences(g.geofences);
@@ -173,7 +200,7 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
     } catch {
       /* session redirect handled in j() */
     }
-  }, []);
+  }, [pushToast]);
 
   useEffect(() => {
     (async () => {
@@ -190,7 +217,7 @@ export function ChebeProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
       }
     })();
-    const t = setInterval(refresh, 30000); // poll-only parity with devices
+    const t = setInterval(refresh, 10000); // poll-only parity with devices
     return () => clearInterval(t);
   }, [userId, refresh]);
 

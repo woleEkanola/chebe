@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Shell } from "@/components/shell";
 import { Topbar, Card } from "@/components/chrome";
+import { DeviceTransparency } from "@/components/family";
 import { useChebe } from "@/lib/store";
 
 export default function ChildrenPage() {
@@ -66,6 +67,7 @@ export default function ChildrenPage() {
             <div className="mt-3 flex gap-2">
               <button onClick={() => remove(c.id, c.name)} className="flex-1 rounded-xl border border-[#E7E1D1] py-2 text-[13px] font-bold text-[#B3261E]">Remove</button>
             </div>
+            <DeviceTransparency childId={c.id} />
           </Card>
         ))}
         <Card>

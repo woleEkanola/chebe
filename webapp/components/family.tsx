@@ -4,6 +4,48 @@ import { useMemo, useState } from "react";
 import { Card, Switch } from "./chrome";
 import { deviceOnline, timeAgo, useChebe } from "@/lib/store";
 
+/** Parent-facing transparency: exactly what a device reports and what it never does. */
+export function DeviceTransparency({ childId }: { childId: string }) {
+  const { children, alerts, usage } = useChebe();
+  const [open, setOpen] = useState(false);
+  const child = children.find((c) => c.id === childId);
+  if (!child) return null;
+  const topApps = Object.entries(usage.find((u) => u.childId === childId)?.top ?? {})
+    .sort((a, b) => b[1].mins - a[1].mins)
+    .slice(0, 3);
+  const sosCount = alerts.filter((a) => a.childId === childId && a.kind === "sos").length;
+  return (
+    <div className="mt-3 border-t border-[#EFEAD9] pt-2">
+      <button onClick={() => setOpen(!open)} className="w-full text-left text-xs font-bold text-[#0C5B40]">
+        {open ? "▾" : "▸"} What this device shares
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2 text-xs text-[#42524a]">
+          {child.devices.map((d) => (
+            <div key={d.id} className="rounded-lg bg-[#F6F4EC] p-2">
+              <div className="font-bold">{d.label} · {d.platform} · policy v{d.policyVersion}</div>
+              <div className="text-[#64756B]">
+                ● {deviceOnline(d) ? "Online" : "Offline"} · last sync {timeAgo(d.lastSeenAt)}
+              </div>
+            </div>
+          ))}
+          <div>
+            <b>Top apps today:</b>{" "}
+            {topApps.length === 0 ? "nothing reported yet" : topApps.map(([pkg, v]) => `${v.label ?? pkg} ${v.mins}m`).join(" · ")}
+          </div>
+          <div><b>SOS events:</b> {sosCount}</div>
+          <div className="rounded-lg bg-[#E3EFE7] p-2">
+            <b className="text-[#083B2A]">Always collected:</b> app names + minutes per day, SOS moments, pairing info.
+          </div>
+          <div className="rounded-lg bg-[#F6F1E0] p-2">
+            <b>Never collected:</b> browsing history or URLs, window titles, keystrokes, message/file contents, camera/mic/screenshots, location (Windows).
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FamilyGrid() {
   const { children, alerts, loading, paused, togglePause } = useChebe();
   if (loading && children.length === 0) {
@@ -75,6 +117,7 @@ export function FamilyGrid() {
               <span className="text-xs text-[#64756B]">Instant pause</span>
               <Switch on={!!isPaused} onClick={() => togglePause(c.id)} label={`pause ${c.name}`} />
             </div>
+            <DeviceTransparency childId={c.id} />
           </Card>
         );
       })}
@@ -99,6 +142,29 @@ export function GlobalPause() {
   );
 }
 
+export function SosBanner() {
+  const { alerts, children, resolveAlert } = useChebe();
+  const open = alerts.filter((a) => a.status === "open" && a.kind === "sos");
+  if (open.length === 0) return null;
+  const top = open[0];
+  const name = children.find((c) => c.id === top.childId)?.name ?? "your child";
+  return (
+    <div className="mb-3 animate-pulse rounded-2xl bg-[#B3261E] p-4 text-white">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="text-2xl">🚨</div>
+        <div className="min-w-0 flex-1">
+          <div className="font-extrabold">SOS from {name} · {timeAgo(top.createdAt)}</div>
+          <div className="truncate text-sm text-white/85">{top.title}{top.detail ? ` — ${top.detail}` : ""}{open.length > 1 ? ` (+${open.length - 1} more)` : ""}</div>
+        </div>
+        <div className="flex gap-2">
+          <a href="/map" className="rounded-xl bg-white px-4 py-2 text-sm font-extrabold text-[#B3261E]">Locate</a>
+          <button onClick={() => resolveAlert(top.id)} className="rounded-xl border-2 border-white px-4 py-2 text-sm font-extrabold text-white">Mark resolved</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const sevColor: Record<string, string> = {
   high: "bg-[#B3261E]",
   medium: "bg-[#D99A1F]",
@@ -114,7 +180,7 @@ export function AlertFeed({ compact = false }: { compact?: boolean }) {
     <Card>
       <div className="mb-2 flex items-center justify-between">
         <div className="font-extrabold">Recent alerts {openCount > 0 && <span className="ml-1 rounded-full bg-[#B3261E] px-2 py-0.5 text-[11px] text-white">{openCount} open</span>}</div>
-        <span className="text-xs text-[#64756B]">Live · 30s poll</span>
+        <span className="text-xs text-[#64756B]">Live · 10s poll</span>
       </div>
       {loading && list.length === 0 && (
         <div className="animate-pulse space-y-2 py-2">

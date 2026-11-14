@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Sidebar, Topbar, Toasts } from "@/components/chrome";
-import { AlertFeed, FamilyGrid, GlobalPause, ScreenTimeCard, WeeklyCard } from "@/components/family";
+import { AlertFeed, FamilyGrid, GlobalPause, ScreenTimeCard, SosBanner, WeeklyCard } from "@/components/family";
 import { useChebe } from "@/lib/store";
 
 export default function Home() {
@@ -24,6 +24,7 @@ export default function Home() {
         />
         <div className="grid gap-3 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-3">
+            <SosBanner />
             <GlobalPause />
             <FamilyGrid />
             <div className="grid gap-3 sm:grid-cols-2">
